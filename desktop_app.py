@@ -303,24 +303,15 @@ class MainWindow(QMainWindow):
         layout.addWidget(options_group)
 
         danger_group = QGroupBox("Danger Zone")
-        danger_group.setStyleSheet(
-            """
-            QGroupBox {
-                background-color: #fff0f0;
-                border: 1px solid #f0b4b4;
-                border-radius: 6px;
-                margin-top: 12px;
-                padding: 12px;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 8px;
-                padding: 0 4px;
-            }
-            """
-        )
         danger_layout = QVBoxLayout(danger_group)
+        danger_layout.setContentsMargins(
+            options_layout.contentsMargins().left(),
+            options_layout.contentsMargins().top(),
+            options_layout.contentsMargins().right(),
+            options_layout.contentsMargins().bottom(),
+        )
         danger_layout.addWidget(self.nuke_check)
+        danger_group.setStyleSheet("QGroupBox { background-color: #fff0f0; }")
         layout.addWidget(danger_group)
 
         layout.addWidget(self.progress)
