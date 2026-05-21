@@ -30,6 +30,7 @@ class ArcPinnedTab:
     parent_id: str
     index: int  # Original position in Arc sidebar
     is_essential: bool = False  # True if this was an Essential tab in Arc
+    is_pinned: bool = True  # False if this was a temporary/unpinned Arc tab
 
     def to_dict(self) -> Dict:
         """Convert to dictionary for serialization."""
@@ -245,18 +246,22 @@ class ArcPinnedTabExtractor:
                         space_name = space_info['name']
                         space_icon = space_info['icon']
 
-                        # Get the correct visual order using container childrenIds
-                        display_order = self._get_space_display_order(space_id, items_lookup, data)
+                        # Get Arc's section order from the explicit pinned/unpinned markers.
+                        pinned_order = self._get_space_section_order(space_id, items_lookup, data, "pinned")
+                        unpinned_order = self._get_space_section_order(space_id, items_lookup, data, "unpinned")
+                        display_order = pinned_order or self._get_space_display_order(space_id, items_lookup, data)
 
 
-                        if display_order:
-                            # Process items in Arc's exact display order with recursive folder extraction
+                        if display_order or unpinned_order:
+                            # Process items in Arc's exact display order with recursive folder extraction.
                             pinned_tabs = []
                             folders = []
                             next_index = 0
 
-                            def process_items_recursive(item_ids, current_folder_path=[]):
+                            def process_items_recursive(item_ids, current_folder_path=None, is_pinned=True):
                                 nonlocal next_index
+                                if current_folder_path is None:
+                                    current_folder_path = []
                                 for item_id in item_ids:
                                     item_data = items_lookup.get(item_id, {})
                                     if not item_data:
@@ -279,7 +284,8 @@ class ArcPinnedTabExtractor:
                                                 folder_path=current_folder_path.copy(),  # Use current folder path
                                                 tab_id=item_id,
                                                 parent_id=item_data.get('parentID', ''),
-                                                index=next_index
+                                                index=next_index,
+                                                is_pinned=is_pinned
                                             )
                                             pinned_tabs.append(pinned_tab)
                                             next_index += 1
@@ -288,26 +294,28 @@ class ArcPinnedTabExtractor:
                                         # This is a folder
                                         if self._item_belongs_to_space(item_id, space_id, items_lookup, data):
                                             folder_title = item_data.get('title', 'Untitled Folder')
-                                            folder = ArcFolder(
-                                                folder_id=item_id,
-                                                title=folder_title,
-                                                parent_id=item_data.get('parentID', ''),
-                                                space_id=space_id,
-                                                children_ids=item_data.get('childrenIds', []),
-                                                index=next_index
-                                            )
-                                            folders.append(folder)
-                                            next_index += 1
+                                            if is_pinned:
+                                                folder = ArcFolder(
+                                                    folder_id=item_id,
+                                                    title=folder_title,
+                                                    parent_id=item_data.get('parentID', ''),
+                                                    space_id=space_id,
+                                                    children_ids=item_data.get('childrenIds', []),
+                                                    index=next_index
+                                                )
+                                                folders.append(folder)
+                                                next_index += 1
 
                                             # Recursively process folder contents
                                             folder_children = item_data.get('childrenIds', [])
                                             if folder_children:
                                                 # Create new folder path for children
-                                                child_folder_path = current_folder_path + [folder_title]
-                                                process_items_recursive(folder_children, child_folder_path)
+                                                child_folder_path = current_folder_path + [folder_title] if is_pinned else current_folder_path
+                                                process_items_recursive(folder_children, child_folder_path, is_pinned)
 
                             # Start recursive processing with top-level display order
-                            process_items_recursive(display_order)
+                            process_items_recursive(display_order, is_pinned=True)
+                            process_items_recursive(unpinned_order, is_pinned=False)
                         else:
                             # Fallback to old method if display order not found
                             pinned_tabs = pinned_tabs_by_space.get(space_id, [])
@@ -707,6 +715,26 @@ class ArcPinnedTabExtractor:
                 return []
 
         return []
+
+    def _get_space_section_order(self, space_id: str, items_lookup: Dict, data: Dict, marker: str) -> List[str]:
+        """Get child item order for a space section after a marker like pinned/unpinned."""
+        space_container_ids = self._get_space_container_ids(space_id, data)
+        if marker not in space_container_ids:
+            return []
+
+        start_index = space_container_ids.index(marker) + 1
+        section_children = []
+
+        for container_id in space_container_ids[start_index:]:
+            if container_id in ["pinned", "unpinned"]:
+                break
+
+            container_data = items_lookup.get(container_id, {})
+            children_ids = container_data.get('childrenIds', [])
+            if children_ids:
+                section_children.extend(children_ids)
+
+        return section_children
 
     def _get_folder_path_local(self, parent_id: str, items_lookup: Dict, space_id: str, data: Dict) -> List[str]:
         """Build the folder path from space root to the item."""

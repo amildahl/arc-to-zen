@@ -10,13 +10,28 @@ import json
 import logging
 import struct
 import uuid
+import hashlib
+import argparse
+import sqlite3
 from pathlib import Path
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any, Tuple, Optional
 from datetime import datetime
 import shutil
+import configparser
+import os
+import copy
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+BOOKMARK_ROOT_GUIDS = {
+    "root________",
+    "menu________",
+    "toolbar_____",
+    "tags________",
+    "unfiled_____",
+    "mobile______",
+}
 
 
 def read_mozilla_lz4(filepath: Path) -> Dict[str, Any]:
@@ -33,12 +48,24 @@ def read_mozilla_lz4(filepath: Path) -> Dict[str, Any]:
         return json.loads(decompressed)
 
 
+def backup_file(filepath: Path, label: str = "backup", timestamp: Optional[str] = None) -> Optional[Path]:
+    """Create a timestamped backup next to a profile file."""
+    if not filepath.exists():
+        return None
+
+    if timestamp:
+        backup_path = filepath.with_name(f"{filepath.name}.codex-{label}-{timestamp}")
+    else:
+        backup_path = filepath.with_suffix(f"{filepath.suffix}.bak")
+
+    shutil.copy2(filepath, backup_path)
+    logger.info(f"✅ Backed up {filepath.name} to {backup_path.name}")
+    return backup_path
+
+
 def write_mozilla_lz4(filepath: Path, data: Dict[str, Any]):
     """Write data in Mozilla's LZ4-compressed JSON format."""
-    backup_path = filepath.with_suffix('.jsonlz4.bak')
-    if filepath.exists():
-        shutil.copy2(filepath, backup_path)
-        logger.info(f"✅ Backed up to {backup_path.name}")
+    backup_file(filepath)
 
     json_bytes = json.dumps(data, separators=(',', ':'), ensure_ascii=False).encode('utf-8')
     logger.info(f"   JSON size: {len(json_bytes):,} bytes")
@@ -63,6 +90,7 @@ def create_zen_tab(arc_tab: Dict, workspace_uuid: str, group_id: str, timestamp:
     """Create a Zen tab entry matching Zen format (as of JAN 2026)."""
     url = arc_tab.get('url', 'about:blank')
     title = arc_tab.get('title', 'Untitled')
+    is_pinned = bool(arc_tab.get('is_pinned', True) or arc_tab.get('is_essential', False))
 
     # Generate unique IDs
     sync_id = f"{timestamp}-{tab_index}"
@@ -92,9 +120,8 @@ def create_zen_tab(arc_tab: Dict, workspace_uuid: str, group_id: str, timestamp:
     tab = {
         "entries": [entry],
         "lastAccessed": timestamp,
-        "pinned": True,
+        "pinned": is_pinned,
         "hidden": False,
-        "groupId": group_id,
         "zenWorkspace": workspace_uuid,
         "zenSyncId": sync_id,
         "zenEssential": arc_tab.get('is_essential', False),
@@ -104,11 +131,6 @@ def create_zen_tab(arc_tab: Dict, workspace_uuid: str, group_id: str, timestamp:
         "zenHasStaticIcon": False,
         "zenGlanceId": None,
         "zenIsGlance": False,
-        "_zenPinnedInitialState": {
-            "entry": entry.copy(),
-            "image": None
-        },
-        "_zenIsActiveTab": False,
         "searchMode": None,
         "userContextId": 0,
         "attributes": {},
@@ -116,12 +138,70 @@ def create_zen_tab(arc_tab: Dict, workspace_uuid: str, group_id: str, timestamp:
         "image": ""
     }
 
+    if is_pinned:
+        if group_id:
+            tab["groupId"] = group_id
+        tab["_zenPinnedInitialState"] = {
+            "entry": entry.copy(),
+            "image": None
+        }
+        tab["_zenIsActiveTab"] = False
+
     return tab
+
+
+def create_zen_empty_tab(workspace_uuid: str, group_id: str, timestamp: int, tab_index: int) -> Dict:
+    """Create Zen's hidden about:blank anchor tab for a folder with no direct tabs."""
+    sync_id = f"{timestamp}-{tab_index}-empty"
+    doc_id = tab_index + 100000
+    entry = {
+        "url": "about:blank",
+        "title": "about:blank",
+        "cacheKey": 0,
+        "ID": doc_id,
+        "docshellUUID": generate_uuid(),
+        "resultPrincipalURI": None,
+        "hasUserInteraction": False,
+        "triggeringPrincipal_base64": '{"3":{}}',
+        "docIdentifier": doc_id + 10000,
+        "children": [],
+        "transient": True,
+        "navigationKey": generate_uuid(),
+        "navigationId": generate_uuid()
+    }
+
+    return {
+        "entries": [entry],
+        "lastAccessed": timestamp,
+        "pinned": True,
+        "hidden": False,
+        "zenWorkspace": workspace_uuid,
+        "zenSyncId": sync_id,
+        "zenEssential": False,
+        "zenDefaultUserContextId": None,
+        "zenPinnedIcon": None,
+        "zenIsEmpty": True,
+        "zenHasStaticIcon": False,
+        "zenGlanceId": None,
+        "zenIsGlance": False,
+        "searchMode": None,
+        "userContextId": 0,
+        "attributes": {},
+        "index": tab_index,
+        "image": None,
+        "groupId": group_id,
+        "_zenPinnedInitialState": {
+            "entry": entry.copy(),
+            "image": None
+        },
+        "_zenIsActiveTab": False
+    }
 
 
 def create_zen_folder(folder_name: str, workspace_uuid: str, timestamp: int, parent_folder_id: str = None) -> Tuple[Dict, Dict, str]:
     """Create a Zen folder and group entry with proper parent relationship."""
-    folder_id = f"{timestamp}-{abs(hash(folder_name + str(parent_folder_id))) % 10000}"
+    stable_hash = hashlib.sha1(f"{folder_name}:{parent_folder_id or ''}".encode("utf-8")).hexdigest()
+    folder_id = f"{timestamp}-{int(stable_hash[:8], 16) % 10000}"
 
     folder = {
         "pinned": True,
@@ -153,6 +233,58 @@ def create_zen_folder(folder_name: str, workspace_uuid: str, timestamp: int, par
     return folder, group, folder_id
 
 
+def folder_path_order(arc_space: Dict) -> Dict[Tuple[str, ...], int]:
+    """Return Arc's sidebar order for each folder path."""
+    folder_records = {
+        folder.get("folder_id"): folder
+        for folder in arc_space.get("folders", [])
+        if folder.get("folder_id")
+    }
+    path_cache = {}
+
+    def arc_folder_path(folder_id: str) -> Tuple[str, ...]:
+        if folder_id in path_cache:
+            return path_cache[folder_id]
+
+        folder = folder_records[folder_id]
+        parent_id = folder.get("parent_id")
+        if parent_id in folder_records:
+            path = arc_folder_path(parent_id) + (folder.get("title", "Untitled Folder"),)
+        else:
+            path = (folder.get("title", "Untitled Folder"),)
+
+        path_cache[folder_id] = path
+        return path
+
+    return {
+        arc_folder_path(folder_id): int(folder.get("index", 1_000_000))
+        for folder_id, folder in folder_records.items()
+    }
+
+
+def apply_folder_sibling_order(folders: List[Dict], path_by_id: Dict[str, Tuple[str, ...]], order_by_path: Dict[Tuple[str, ...], int]):
+    """Set prevSiblingInfo so Zen restores nested folders in Arc's order."""
+    siblings = {}
+    for folder in folders:
+        path = path_by_id.get(folder.get("id"))
+        if not path:
+            continue
+        parent = path[:-1] or None
+        siblings.setdefault(parent, []).append(folder)
+
+    for sibling_folders in siblings.values():
+        sibling_folders.sort(
+            key=lambda folder: (
+                order_by_path.get(path_by_id.get(folder.get("id"), ()), 1_000_000),
+                path_by_id.get(folder.get("id"), ()),
+            )
+        )
+        previous_id = None
+        for folder in sibling_folders:
+            folder["prevSiblingInfo"] = {"type": "group", "id": previous_id} if previous_id else {"type": "start", "id": None}
+            previous_id = folder.get("id")
+
+
 def build_folder_hierarchy(arc_space: Dict, workspace_uuid: str, base_timestamp: int) -> Tuple[List[Dict], List[Dict], Dict]:
     """Build nested folder structure from Arc folders.
 
@@ -165,8 +297,10 @@ def build_folder_hierarchy(arc_space: Dict, workspace_uuid: str, base_timestamp:
     groups = []
     folder_map = {}  # Maps Arc folder path (as tuple) -> Zen folder ID
 
-    # First, collect all unique folder paths from tabs
+    order_by_path = folder_path_order(arc_space)
     all_folder_paths = set()
+    all_folder_paths.update(order_by_path)
+
     for tab in arc_space['pinned_tabs']:
         folder_path = tab.get('folder_path', [])
         if folder_path:
@@ -174,10 +308,14 @@ def build_folder_hierarchy(arc_space: Dict, workspace_uuid: str, base_timestamp:
             for i in range(1, len(folder_path) + 1):
                 all_folder_paths.add(tuple(folder_path[:i]))
 
-    # Sort by depth (shortest first) to create parents before children
-    sorted_paths = sorted(all_folder_paths, key=len)
+    # Sort by depth first so parents exist, then Arc's sidebar order for siblings.
+    sorted_paths = sorted(
+        all_folder_paths,
+        key=lambda path: (len(path), order_by_path.get(path, 1_000_000), path),
+    )
 
     counter = 0
+    path_by_id = {}
     for folder_path_tuple in sorted_paths:
         folder_name = folder_path_tuple[-1]  # Last component is the folder name
 
@@ -198,6 +336,7 @@ def build_folder_hierarchy(arc_space: Dict, workspace_uuid: str, base_timestamp:
         folders.append(folder)
         groups.append(group)
         folder_map[folder_path_tuple] = folder_id
+        path_by_id[folder_id] = folder_path_tuple
 
         # Log with indentation to show hierarchy
         indent = "  " * (len(folder_path_tuple) - 1)
@@ -206,26 +345,253 @@ def build_folder_hierarchy(arc_space: Dict, workspace_uuid: str, base_timestamp:
 
         counter += 1
 
+    apply_folder_sibling_order(folders, path_by_id, order_by_path)
     return folders, groups, folder_map
 
 
-def main():
-    """Import Arc tabs into Zen PROFILE profile with proper nested folders."""
-    # Use PROFILE profile
-    zen_profile = Path.home() / "Library" / "Application Support" / "zen" / "Profiles"
-    profile = None
-    for p in zen_profile.iterdir():
-        if p.is_dir() and "PROFILE" in p.name:
-            profile = p
-            break
+def add_empty_folder_anchors(
+    zen_data: Dict[str, Any],
+    space_folders: List[Dict[str, Any]],
+    workspace_uuid: str,
+    timestamp: int,
+    tab_index: int,
+) -> int:
+    """Add hidden placeholder tabs for folder groups that otherwise contain only subfolders."""
+    direct_tab_counts = {}
+    for tab in zen_data.get("tabs", []):
+        if tab.get("zenWorkspace") != workspace_uuid or tab.get("zenIsEmpty"):
+            continue
+        group_id = tab.get("groupId")
+        if group_id:
+            direct_tab_counts[group_id] = direct_tab_counts.get(group_id, 0) + 1
 
-    if not profile:
-        logger.error("❌ PROFILE profile not found")
+    anchored = 0
+    for folder in space_folders:
+        folder_id = folder.get("id")
+        if direct_tab_counts.get(folder_id):
+            continue
+        if folder.get("emptyTabIds"):
+            continue
+
+        empty_tab = create_zen_empty_tab(workspace_uuid, folder_id, timestamp + anchored, tab_index)
+        folder["emptyTabIds"] = [empty_tab["zenSyncId"]]
+        zen_data["tabs"].append(empty_tab)
+        tab_index += 1
+        anchored += 1
+        logger.info(f"   📎 Added empty folder anchor: {folder.get('name')}")
+
+    return tab_index
+
+
+def resolve_zen_profile() -> Path:
+    """Resolve the target Zen profile from env vars, installs.ini, or profiles.ini."""
+    zen_dir = Path.home() / "Library" / "Application Support" / "zen"
+    profiles_dir = zen_dir / "Profiles"
+
+    requested_path = os.environ.get("ZEN_PROFILE_PATH")
+    if requested_path:
+        profile = Path(requested_path).expanduser()
+        if profile.is_dir():
+            return profile
+        raise FileNotFoundError(f"ZEN_PROFILE_PATH does not exist: {profile}")
+
+    requested_name = os.environ.get("ZEN_PROFILE_NAME")
+    if requested_name:
+        for profile in profiles_dir.iterdir():
+            if profile.is_dir() and requested_name in profile.name:
+                return profile
+        raise FileNotFoundError(f"ZEN_PROFILE_NAME not found: {requested_name}")
+
+    installs_ini = zen_dir / "installs.ini"
+    if installs_ini.exists():
+        config = configparser.ConfigParser()
+        config.read(installs_ini)
+        for section in config.sections():
+            default = config.get(section, "Default", fallback=None)
+            if default:
+                profile = zen_dir / default if not Path(default).is_absolute() else Path(default)
+                if profile.is_dir():
+                    return profile
+
+    profiles_ini = zen_dir / "profiles.ini"
+    if profiles_ini.exists():
+        config = configparser.ConfigParser()
+        config.read(profiles_ini)
+        for section in config.sections():
+            if not section.startswith("Profile"):
+                continue
+            if config.get(section, "Default", fallback="0") == "1":
+                profile_path = config.get(section, "Path", fallback=None)
+                is_relative = config.get(section, "IsRelative", fallback="1") == "1"
+                if profile_path:
+                    profile = zen_dir / profile_path if is_relative else Path(profile_path)
+                    if profile.is_dir():
+                        return profile
+
+    for profile in profiles_dir.iterdir():
+        if profile.is_dir() and (profile / "zen-sessions.jsonlz4").exists():
+            return profile
+
+    raise FileNotFoundError("No Zen profile with zen-sessions.jsonlz4 found")
+
+
+def reset_session_window_state(window: Dict[str, Any]):
+    """Remove current/open and recently closed tab state from one sessionstore window."""
+    window["tabs"] = []
+    window["folders"] = []
+    window["groups"] = []
+    window["splitViews"] = []
+    window["splitViewData"] = []
+    window["closedGroups"] = []
+    window["_closedTabs"] = []
+    window["_lastClosedTabGroupCount"] = -1
+    window["lastClosedTabGroupId"] = None
+    window["selected"] = 1
+
+
+def reset_zen_session_state(data: Dict[str, Any], clear_window_history: bool = False):
+    """Clear Zen session tabs, folders, groups, pins, and optional closed-tab history."""
+    if "windows" in data:
+        for window in data.get("windows", []):
+            reset_session_window_state(window)
+        data["savedGroups"] = []
+        data["_closedWindows"] = []
+        data["maxSplitViewId"] = 0
+        return
+
+    data["tabs"] = []
+    data["folders"] = []
+    data["groups"] = []
+    data["splitViewData"] = []
+
+
+def nuke_bookmarks(profile: Path, timestamp: str) -> int:
+    """Remove all non-root Firefox/Zen bookmarks from places.sqlite."""
+    places = profile / "places.sqlite"
+    if not places.exists():
+        logger.info("No places.sqlite found; skipping bookmark nuke")
+        return 0
+
+    for candidate in (places, places.with_name("places.sqlite-wal"), places.with_name("places.sqlite-shm")):
+        backup_file(candidate, "nuke-backup", timestamp)
+
+    con = sqlite3.connect(places)
+    try:
+        con.execute("PRAGMA foreign_keys=OFF")
+        before = con.execute("SELECT count(*) FROM moz_bookmarks").fetchone()[0]
+        placeholders = ",".join("?" for _ in BOOKMARK_ROOT_GUIDS)
+        con.execute(f"DELETE FROM moz_bookmarks WHERE guid NOT IN ({placeholders})", tuple(BOOKMARK_ROOT_GUIDS))
+        con.execute("DELETE FROM moz_bookmarks_deleted")
+        con.commit()
+        after = con.execute("SELECT count(*) FROM moz_bookmarks").fetchone()[0]
+        removed = before - after
+        logger.info(f"🧨 Removed {removed} bookmarks/folders from places.sqlite")
+        return removed
+    finally:
+        con.close()
+
+
+def nuke_session_file(path: Path, timestamp: str) -> bool:
+    if not path.exists():
+        logger.info(f"Skipping missing nuke target: {path}")
+        return False
+
+    data = read_mozilla_lz4(path)
+    reset_zen_session_state(data, clear_window_history=True)
+    backup_file(path, "nuke-backup", timestamp)
+    write_mozilla_lz4(path, data)
+    return True
+
+
+def nuke_zen_profile(profile: Path, timestamp: str):
+    """Destructively clear Zen tabs, folders, pins, groups, closed tabs, and bookmarks."""
+    logger.info("🧨 Nuke mode: clearing Zen tabs, folders, pins, groups, closed tab state, and bookmarks")
+    nuke_session_file(profile / "zen-sessions.jsonlz4", timestamp)
+    nuke_session_file(profile / "sessionstore.jsonlz4", timestamp)
+    nuke_session_file(profile / "sessionstore-backups" / "recovery.jsonlz4", timestamp)
+    nuke_bookmarks(profile, timestamp)
+
+
+def sync_sessionstore(profile: Path, zen_data: Dict[str, Any], nuke: bool = False):
+    """Update Firefox/Zen sessionstore files so temporary tabs restore as open tabs."""
+    session_paths = [
+        profile / "sessionstore.jsonlz4",
+        profile / "sessionstore-backups" / "recovery.jsonlz4",
+    ]
+
+    space_ids = {space.get("uuid") for space in zen_data.get("spaces", [])}
+
+    for session_path in session_paths:
+        if not session_path.exists():
+            logger.info(f"   Skipping missing sessionstore file: {session_path.name}")
+            continue
+
+        session_data = read_mozilla_lz4(session_path)
+        windows = session_data.get("windows", [])
+        if not windows:
+            logger.info(f"   Skipping sessionstore without windows: {session_path.name}")
+            continue
+
+        if nuke:
+            reset_zen_session_state(session_data, clear_window_history=True)
+
+        window = windows[0]
+        window["spaces"] = copy.deepcopy(zen_data.get("spaces", []))
+        window["folders"] = copy.deepcopy(zen_data.get("folders", []))
+        window["groups"] = copy.deepcopy(zen_data.get("groups", []))
+        window["splitViewData"] = copy.deepcopy(zen_data.get("splitViewData", {}))
+        window["tabs"] = copy.deepcopy(zen_data.get("tabs", []))
+
+        if window["tabs"]:
+            selected = window.get("selected", 1)
+            if not isinstance(selected, int):
+                selected = 1
+            window["selected"] = max(1, min(selected, len(window["tabs"])))
+
+        if window.get("activeZenSpace") not in space_ids and zen_data.get("spaces"):
+            window["activeZenSpace"] = zen_data["spaces"][0].get("uuid")
+
+        write_mozilla_lz4(session_path, session_data)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Import Arc sidebar data into Zen session files.")
+    parser.add_argument(
+        "--nuke",
+        action="store_true",
+        help="Before importing, remove all Zen tabs, folders, pins, tab groups, closed tab state, and regular bookmarks.",
+    )
+    parser.add_argument(
+        "--nuke-only",
+        action="store_true",
+        help="Only perform the destructive Zen cleanup; do not import Arc data afterward.",
+    )
+    return parser.parse_args()
+
+
+def main():
+    """Import Arc tabs into the resolved Zen profile with proper nested folders."""
+    args = parse_args()
+
+    try:
+        profile = resolve_zen_profile()
+    except Exception as e:
+        logger.error(f"❌ Zen profile not found: {e}")
         return False
 
     logger.info(f"✅ Using profile: {profile.name}")
+    nuke_timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+    if args.nuke or args.nuke_only:
+        nuke_zen_profile(profile, nuke_timestamp)
+        if args.nuke_only:
+            return True
 
     sessions_file = profile / "zen-sessions.jsonlz4"
+    if not sessions_file.exists():
+        logger.error(f"❌ Zen session file not found: {sessions_file}")
+        return False
+
     arc_export_file = Path("arc_pinned_tabs_export.json")
 
     if not arc_export_file.exists():
@@ -244,9 +610,7 @@ def main():
     logger.info(f"✅ Current Zen: {len(zen_data['spaces'])} workspaces, {len(zen_data.get('tabs', []))} tabs")
 
     # Clear existing tabs, folders, groups (fresh start)
-    zen_data['tabs'] = []
-    zen_data['folders'] = []
-    zen_data['groups'] = []
+    reset_zen_session_state(zen_data)
 
     # Create workspaces for Arc spaces
     base_timestamp = int(datetime.now().timestamp() * 1000)
@@ -303,30 +667,19 @@ def main():
 
         # Process tabs
         for arc_tab in arc_space['pinned_tabs']:
+            is_pinned = bool(arc_tab.get('is_pinned', True) or arc_tab.get('is_essential', False))
             # Determine which folder this tab belongs to
             folder_path = arc_tab.get('folder_path', [])
 
-            if folder_path:
-                folder_path_tuple = tuple(folder_path)
-                group_id = folder_map.get(folder_path_tuple)
+            if is_pinned:
+                if folder_path:
+                    folder_path_tuple = tuple(folder_path)
+                    group_id = folder_map.get(folder_path_tuple)
+                else:
+                    # Arc allows pinned shortcuts directly at the workspace root.
+                    group_id = None
             else:
-                # Tab has no folder - create a default folder for loose tabs
-                default_folder_name = f"{space_name} Tabs"
-                default_folder_key = (default_folder_name,)
-
-                if default_folder_key not in folder_map:
-                    folder, group, folder_id = create_zen_folder(
-                        default_folder_name,
-                        workspace_uuid,
-                        base_timestamp + tab_index
-                    )
-                    zen_data['folders'].append(folder)
-                    zen_data['groups'].append(group)
-                    folder_map[default_folder_key] = folder_id
-                    logger.info(f"   📂 Created default folder: {default_folder_name}")
-                    tab_index += 1
-
-                group_id = folder_map[default_folder_key]
+                group_id = None
 
             # Create tab
             zen_tab = create_zen_tab(arc_tab, workspace_uuid, group_id, base_timestamp + tab_index, tab_index)
@@ -334,18 +687,26 @@ def main():
             tab_index += 1
 
         logger.info(f"   ✅ Added {arc_space['total_pinned_tabs']} tabs")
+        tab_index = add_empty_folder_anchors(
+            zen_data,
+            space_folders,
+            workspace_uuid,
+            base_timestamp + tab_index,
+            tab_index,
+        )
 
     # Update timestamp
     zen_data['lastCollected'] = base_timestamp
 
     # Write back
     write_mozilla_lz4(sessions_file, zen_data)
+    sync_sessionstore(profile, zen_data, nuke=args.nuke)
 
     logger.info(f"\n🎉 Migration Complete!")
     logger.info(f"   Workspaces: {len(zen_data['spaces'])}")
     logger.info(f"   Folders: {len(zen_data['folders'])}")
     logger.info(f"   Tabs: {len(zen_data['tabs'])}")
-    logger.info(f"\n💡 Open Zen Browser (PROFILE profile) to see your Arc tabs with proper nested folders!")
+    logger.info(f"\n💡 Open Zen Browser ({profile.name} profile) to see your Arc tabs with proper nested folders!")
 
     return True
 
