@@ -14,7 +14,7 @@ pip install -r requirements-desktop.txt
 python desktop_app.py
 ```
 
-Local one-file desktop build:
+Local desktop package build:
 
 ```bash
 pip install -r requirements-build.txt
@@ -60,9 +60,19 @@ Use `--nuke-only` to perform only that cleanup.
   - Uses a temporary export file so GUI runs do not leave `arc_pinned_tabs_export.json`.
 
 - `scripts/build_desktop.py`
-  - Builds a PyInstaller one-file executable for the current OS.
-  - Packages the executable into `release-artifacts/`.
+  - Builds a PyInstaller native-style package for the current OS.
+  - macOS emits `Arc to Zen.app`, Windows emits a windowed app folder, and
+    Linux emits an app folder with a `.desktop` entry.
+  - Packages output into `release-artifacts/`.
   - Uses native builds, not cross-compilation.
+
+- `assets/app-icon.svg`
+  - Source app icon. It is an original Arc/Zen-inspired migration mark, not a
+    direct copy of either browser logo.
+  - Run `python scripts/generate_icon_assets.py` after editing it.
+
+- `scripts/render_readme_screenshot.py`
+  - Renders `docs/app-screenshot.png` from the actual Qt window.
 
 - `.github/workflows/ci.yml`
   - Runs the Python syntax check on pushes to `main` and pull requests.
@@ -137,7 +147,9 @@ python -m py_compile \
   sync_arc_workspace_icons.py \
   sync_arc_workspace_themes.py \
   desktop_app.py \
-  scripts/build_desktop.py
+  scripts/build_desktop.py \
+  scripts/generate_icon_assets.py \
+  scripts/render_readme_screenshot.py
 ```
 
 Release a new version:

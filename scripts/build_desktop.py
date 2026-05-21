@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a one-file desktop executable and package it for release."""
+"""Build a native-feeling desktop app package for release."""
 
 from __future__ import annotations
 
@@ -16,6 +16,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 APP_NAME = "arc-to-zen"
+APP_DISPLAY_NAME = "Arc to Zen"
+ASSETS_DIR = REPO_ROOT / "assets"
 
 
 def platform_label() -> str:
@@ -29,8 +31,20 @@ def platform_label() -> str:
     return f"{system}-{aliases.get(machine, machine)}"
 
 
-def executable_name() -> str:
-    return f"{APP_NAME}.exe" if platform.system().lower() == "windows" else APP_NAME
+def system_name() -> str:
+    return platform.system().lower()
+
+
+def pyinstaller_name() -> str:
+    return APP_DISPLAY_NAME if system_name() in {"darwin", "windows"} else APP_NAME
+
+
+def icon_path() -> Path:
+    if system_name() == "darwin":
+        return ASSETS_DIR / "app-icon.icns"
+    if system_name() == "windows":
+        return ASSETS_DIR / "app-icon.ico"
+    return ASSETS_DIR / "app-icon.png"
 
 
 def run_pyinstaller(label: str) -> Path:
@@ -48,11 +62,14 @@ def run_pyinstaller(label: str) -> Path:
         "PyInstaller",
         "--clean",
         "--noconfirm",
-        "--onefile",
         "--name",
-        APP_NAME,
+        pyinstaller_name(),
         "--hidden-import",
         "lz4.block",
+        "--icon",
+        str(icon_path()),
+        "--add-data",
+        f"{ASSETS_DIR / 'app-icon.png'}{os.pathsep}assets",
         "--distpath",
         str(dist_dir),
         "--workpath",
@@ -61,36 +78,78 @@ def run_pyinstaller(label: str) -> Path:
         str(spec_dir),
         str(REPO_ROOT / "desktop_app.py"),
     ]
-    if platform.system().lower() == "windows":
+
+    if system_name() in {"darwin", "windows"}:
         command.insert(command.index("--name"), "--windowed")
+    if system_name() == "darwin":
+        command.extend(["--osx-bundle-identifier", "com.thinkscape.arc-to-zen"])
 
     subprocess.run(command, cwd=REPO_ROOT, check=True)
 
-    executable = dist_dir / executable_name()
+    if system_name() == "darwin":
+        target = dist_dir / f"{APP_DISPLAY_NAME}.app"
+        if not target.exists():
+            raise FileNotFoundError(f"PyInstaller did not create {target}")
+        subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(target)], check=True)
+        return target
+
+    target = dist_dir / pyinstaller_name()
+    if not target.exists():
+        raise FileNotFoundError(f"PyInstaller did not create {target}")
+
+    executable = target / f"{APP_DISPLAY_NAME}.exe" if system_name() == "windows" else target / APP_NAME
     if not executable.exists():
         raise FileNotFoundError(f"PyInstaller did not create {executable}")
 
-    if platform.system().lower() != "windows":
+    if system_name() == "linux":
         executable.chmod(executable.stat().st_mode | 0o755)
+        desktop_file = target / f"{APP_NAME}.desktop"
+        desktop_file.write_text(
+            "\n".join(
+                [
+                    "[Desktop Entry]",
+                    "Type=Application",
+                    f"Name={APP_DISPLAY_NAME}",
+                    f"Exec=./{APP_NAME}",
+                    f"Icon={APP_NAME}",
+                    "Terminal=false",
+                    "Categories=Utility;",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        shutil.copy2(ASSETS_DIR / "app-icon.png", target / f"{APP_NAME}.png")
 
-    return executable
+    return target
 
 
-def package_artifact(executable: Path, label: str, version: str, artifact_dir: Path) -> Path:
+def add_path_to_zip(zip_file: zipfile.ZipFile, source: Path, arcname: Path) -> None:
+    if source.is_dir():
+        for path in source.rglob("*"):
+            zip_file.write(path, arcname / path.relative_to(source))
+    else:
+        zip_file.write(source, arcname)
+
+
+def package_artifact(target: Path, label: str, version: str, artifact_dir: Path) -> Path:
     artifact_dir.mkdir(parents=True, exist_ok=True)
     base_name = f"{APP_NAME}-{version}-{label}"
 
-    if platform.system().lower() == "windows":
+    if system_name() == "darwin":
+        archive = artifact_dir / f"{base_name}.zip"
+        subprocess.run(
+            ["ditto", "-c", "-k", "--keepParent", "--norsrc", str(target), str(archive)],
+            check=True,
+        )
+    elif system_name() == "windows":
         archive = artifact_dir / f"{base_name}.zip"
         with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
-            zip_file.write(executable, executable.name)
+            add_path_to_zip(zip_file, target, Path(target.name))
     else:
         archive = artifact_dir / f"{base_name}.tar.gz"
         with tarfile.open(archive, "w:gz") as tar_file:
-            tar_info = tar_file.gettarinfo(executable, executable.name)
-            tar_info.mode |= 0o755
-            with executable.open("rb") as file_obj:
-                tar_file.addfile(tar_info, file_obj)
+            tar_file.add(target, arcname=target.name)
 
     return archive
 
@@ -109,8 +168,8 @@ def main() -> int:
     if not artifact_dir.is_absolute():
         artifact_dir = REPO_ROOT / artifact_dir
 
-    executable = run_pyinstaller(args.platform_label)
-    archive = package_artifact(executable, args.platform_label, args.version, artifact_dir)
+    target = run_pyinstaller(args.platform_label)
+    archive = package_artifact(target, args.platform_label, args.version, artifact_dir)
     print(archive)
     return 0
 

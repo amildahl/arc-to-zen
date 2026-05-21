@@ -21,6 +21,7 @@ if sys.stderr is None:
 try:
     import psutil
     from PySide6.QtCore import QThread, Qt, Signal
+    from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import (
         QApplication,
         QCheckBox,
@@ -52,8 +53,14 @@ from zen_sessions_importer_v4 import import_arc_export
 
 
 APP_STYLESHEET = """
+QMainWindow {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #e9edf2, stop:0.18 #f4f6f8, stop:1 #f6f7f9);
+}
+
 QWidget#Root {
-    background: #f6f7f9;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #e9edf2, stop:0.18 #f4f6f8, stop:1 #f6f7f9);
 }
 
 QFrame#CardPanel,
@@ -176,6 +183,11 @@ class MigrationConfig:
 
 def format_path(path: Path) -> str:
     return str(path.expanduser())
+
+
+def resource_path(*parts: str) -> Path:
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    return base.joinpath(*parts)
 
 
 def clean_log_line(line: str) -> str:
@@ -348,7 +360,8 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.worker: MigrationWorker | None = None
-        self.setWindowTitle("Arc to Zen Migration")
+        self.setWindowTitle("Arc to Zen")
+        self.setWindowIcon(QIcon(str(resource_path("assets", "app-icon.png"))))
         self.resize(900, 720)
 
         self.arc_combo = self._profile_combo(discover_arc_profiles())
@@ -578,7 +591,10 @@ class MainWindow(QMainWindow):
 
 
 def main() -> int:
+    QApplication.setApplicationName("Arc to Zen")
+    QApplication.setOrganizationName("Thinkscape")
     app = QApplication(sys.argv)
+    app.setWindowIcon(QIcon(str(resource_path("assets", "app-icon.png"))))
     app.setStyleSheet(APP_STYLESHEET)
     window = MainWindow()
     window.show()

@@ -36,4 +36,6 @@ jobs:
             sync_arc_workspace_icons.py \
             sync_arc_workspace_themes.py \
             desktop_app.py \
-            scripts/build_desktop.py
+            scripts/build_desktop.py \
+            scripts/generate_icon_assets.py \
+            scripts/render_readme_screenshot.py
