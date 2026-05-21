@@ -560,12 +560,10 @@ class MainWindow(QMainWindow):
     def update_step(self, current: int, total: int, title: str):
         self.progress.setMaximum(total)
         self.progress.setValue(current - 1)
-        self.statusBar().showMessage(title)
 
     def finish_migration(self, ok: bool, message: str):
         self.progress.setValue(self.progress.maximum())
         self.run_button.setEnabled(True)
-        self.statusBar().showMessage(message)
         if ok:
             self.log.append("\nMigration finished successfully.")
             QMessageBox.information(self, "Migration complete", message)
