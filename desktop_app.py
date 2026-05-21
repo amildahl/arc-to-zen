@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -134,10 +135,11 @@ QProgressBar::chunk {
 }
 
 QTextEdit {
-    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-family: "SF Mono", Menlo, Monaco, Consolas, "Courier New", monospace;
     font-size: 12px;
 }
 """
+LOG_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} - [A-Z]+ - ")
 ZEN_PROCESS_NAMES = {
     "zen",
     "zen.exe",
@@ -163,6 +165,10 @@ class MigrationConfig:
 
 def format_path(path: Path) -> str:
     return str(path.expanduser())
+
+
+def clean_log_line(line: str) -> str:
+    return LOG_PREFIX_RE.sub("", line)
 
 
 def zen_processes() -> list[psutil.Process]:
@@ -328,7 +334,7 @@ class MigrationWorker(QThread):
                 )
                 assert result.stdout is not None
                 for line in result.stdout:
-                    self.line.emit(line.rstrip())
+                    self.line.emit(clean_log_line(line.rstrip()))
                 return_code = result.wait()
                 if return_code != 0:
                     raise RuntimeError(f"{title} failed with exit code {return_code}")
