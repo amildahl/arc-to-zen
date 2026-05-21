@@ -47,33 +47,33 @@ Install Python dependencies:
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
-pip install -r requirements.txt
+pip install -e .
 ```
 
 Run the full migration:
 
 ```bash
-python src/arc_pinned_tab_extractor.py
-python zen_sessions_importer_v4.py
-python migrate_arc_favicons.py
-python sync_arc_folder_states.py
-python sync_arc_workspace_icons.py
-python sync_arc_workspace_themes.py
+python cli.py
 ```
 
 Clean rebuild mode:
 
 ```bash
-python src/arc_pinned_tab_extractor.py
-python zen_sessions_importer_v4.py --nuke
-python migrate_arc_favicons.py
-python sync_arc_folder_states.py
-python sync_arc_workspace_icons.py
-python sync_arc_workspace_themes.py
+python cli.py --nuke
 ```
 
 `--nuke` clears existing Zen tabs, folders, pins, groups, closed-tab state, and
 regular bookmarks before importing Arc data. It creates backups first.
+
+Useful switches:
+
+- `--arc-profile PATH`
+- `--zen-profile PATH`
+- `--no-favicons`
+- `--no-folder-states`
+- `--no-workspace-icons`
+- `--no-workspace-themes`
+- `--nuke-only`
 
 ## Profiles
 
@@ -100,7 +100,7 @@ for macOS and Windows only.
 Build a native package for the current OS:
 
 ```bash
-pip install -r requirements-build.txt
+pip install -e ".[build]"
 python scripts/build_desktop.py --version dev
 ```
 
