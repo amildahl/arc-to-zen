@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  python-check:
+    name: Python syntax check
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install desktop dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-desktop.txt
+
+      - name: Compile Python sources
+        run: |
+          python -m py_compile \
+            src/__init__.py \
+            src/profile_paths.py \
+            src/arc_pinned_tab_extractor.py \
+            zen_sessions_importer_v4.py \
+            migrate_arc_favicons.py \
+            sync_arc_folder_states.py \
+            sync_arc_workspace_icons.py \
+            sync_arc_workspace_themes.py \
+            desktop_app.py \
+            scripts/build_desktop.py
