@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 This repository contains Python scripts for migrating Arc Browser sidebar data
 into Zen Browser on macOS.
