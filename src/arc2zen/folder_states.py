@@ -171,7 +171,7 @@ def backup(path: Path, timestamp: str):
     logger.info(f"✅ Backed up {path.name} to {backup_path.name}")
 
 
-def update_file(path: Path, states: Dict[FolderKey, bool], timestamp: str) -> tuple[int, int]:
+def update_file(path: Path, states: Dict[FolderKey, bool], timestamp: str, create_backups: bool = True) -> tuple[int, int]:
     if not path.exists():
         logger.info(f"Skipping missing file: {path}")
         return 0, 0
@@ -179,14 +179,19 @@ def update_file(path: Path, states: Dict[FolderKey, bool], timestamp: str) -> tu
     data = read_mozilla_lz4(path)
     matched, changed = set_folder_states(data, states)
     if changed:
-        backup(path, timestamp)
-        write_mozilla_lz4(path, data)
+        if create_backups:
+            backup(path, timestamp)
+        write_mozilla_lz4(path, data, create_backup=False)
 
     logger.info(f"{path.name}: matched {matched} folders, changed {changed} collapsed fields")
     return matched, changed
 
 
-def sync_folder_states(arc_profile: str | Path | None = None, zen_profile: str | Path | None = None) -> bool:
+def sync_folder_states(
+    arc_profile: str | Path | None = None,
+    zen_profile: str | Path | None = None,
+    create_backups: bool = True,
+) -> bool:
     """Sync Arc pinned-folder expanded/collapsed state into Zen."""
     profile = resolve_zen_profile(zen_profile)
     states = arc_folder_states(arc_profile)
@@ -202,7 +207,7 @@ def sync_folder_states(arc_profile: str | Path | None = None, zen_profile: str |
 
     total_changed = 0
     for path in files:
-        _, changed = update_file(path, states, timestamp)
+        _, changed = update_file(path, states, timestamp, create_backups=create_backups)
         total_changed += changed
 
     logger.info(f"Done. Changed {total_changed} folder/group collapsed fields across Zen session files.")
@@ -219,8 +224,13 @@ def main() -> bool:
         "--zen-profile",
         help="Path to a Zen profile directory, or a Zen root containing profiles.ini.",
     )
+    parser.add_argument(
+        "--no-backups",
+        action="store_true",
+        help="Do not create backups before changing Zen profile files.",
+    )
     args = parser.parse_args()
-    return sync_folder_states(args.arc_profile, args.zen_profile)
+    return sync_folder_states(args.arc_profile, args.zen_profile, create_backups=not args.no_backups)
 
 
 if __name__ == "__main__":

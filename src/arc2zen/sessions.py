@@ -64,11 +64,12 @@ def backup_file(filepath: Path, label: str = "backup", timestamp: Optional[str] 
     return backup_path
 
 
-def write_mozilla_lz4(filepath: Path, data: Dict[str, Any]):
+def write_mozilla_lz4(filepath: Path, data: Dict[str, Any], create_backup: bool = True):
     """Write data in Mozilla's LZ4-compressed JSON format."""
     import lz4.block
 
-    backup_file(filepath)
+    if create_backup:
+        backup_file(filepath)
 
     json_bytes = json.dumps(data, separators=(',', ':'), ensure_ascii=False).encode('utf-8')
     logger.info(f"   JSON size: {len(json_bytes):,} bytes")
@@ -421,7 +422,7 @@ def reset_zen_session_state(data: Dict[str, Any], clear_window_history: bool = F
     data["splitViewData"] = []
 
 
-def nuke_bookmarks(profile: Path, timestamp: str) -> int:
+def nuke_bookmarks(profile: Path, timestamp: str, create_backups: bool = True) -> int:
     """Remove all non-root Firefox/Zen bookmarks from places.sqlite."""
     places = profile / "places.sqlite"
     if not places.exists():
@@ -429,7 +430,8 @@ def nuke_bookmarks(profile: Path, timestamp: str) -> int:
         return 0
 
     for candidate in (places, places.with_name("places.sqlite-wal"), places.with_name("places.sqlite-shm")):
-        backup_file(candidate, "nuke-backup", timestamp)
+        if create_backups:
+            backup_file(candidate, "nuke-backup", timestamp)
 
     con = sqlite3.connect(places)
     try:
@@ -447,28 +449,34 @@ def nuke_bookmarks(profile: Path, timestamp: str) -> int:
         con.close()
 
 
-def nuke_session_file(path: Path, timestamp: str) -> bool:
+def nuke_session_file(path: Path, timestamp: str, create_backups: bool = True) -> bool:
     if not path.exists():
         logger.info(f"Skipping missing nuke target: {path}")
         return False
 
     data = read_mozilla_lz4(path)
     reset_zen_session_state(data, clear_window_history=True)
-    backup_file(path, "nuke-backup", timestamp)
-    write_mozilla_lz4(path, data)
+    if create_backups:
+        backup_file(path, "nuke-backup", timestamp)
+    write_mozilla_lz4(path, data, create_backup=False)
     return True
 
 
-def nuke_zen_profile(profile: Path, timestamp: str):
+def nuke_zen_profile(profile: Path, timestamp: str, create_backups: bool = True):
     """Destructively clear Zen tabs, folders, pins, groups, closed tabs, and bookmarks."""
     logger.info("🧨 Nuke mode: clearing Zen tabs, folders, pins, groups, closed tab state, and bookmarks")
-    nuke_session_file(profile / "zen-sessions.jsonlz4", timestamp)
-    nuke_session_file(profile / "sessionstore.jsonlz4", timestamp)
-    nuke_session_file(profile / "sessionstore-backups" / "recovery.jsonlz4", timestamp)
-    nuke_bookmarks(profile, timestamp)
+    nuke_session_file(profile / "zen-sessions.jsonlz4", timestamp, create_backups=create_backups)
+    nuke_session_file(profile / "sessionstore.jsonlz4", timestamp, create_backups=create_backups)
+    nuke_session_file(profile / "sessionstore-backups" / "recovery.jsonlz4", timestamp, create_backups=create_backups)
+    nuke_bookmarks(profile, timestamp, create_backups=create_backups)
 
 
-def sync_sessionstore(profile: Path, zen_data: Dict[str, Any], nuke: bool = False):
+def sync_sessionstore(
+    profile: Path,
+    zen_data: Dict[str, Any],
+    nuke: bool = False,
+    create_backups: bool = True,
+):
     """Update Firefox/Zen sessionstore files so temporary tabs restore as open tabs."""
     session_paths = [
         profile / "sessionstore.jsonlz4",
@@ -507,7 +515,7 @@ def sync_sessionstore(profile: Path, zen_data: Dict[str, Any], nuke: bool = Fals
         if window.get("activeZenSpace") not in space_ids and zen_data.get("spaces"):
             window["activeZenSpace"] = zen_data["spaces"][0].get("uuid")
 
-        write_mozilla_lz4(session_path, session_data)
+        write_mozilla_lz4(session_path, session_data, create_backup=create_backups)
 
 
 def parse_args() -> argparse.Namespace:
@@ -531,6 +539,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Only perform the destructive Zen cleanup; do not import Arc data afterward.",
     )
+    parser.add_argument(
+        "--no-backups",
+        action="store_true",
+        help="Do not create backups before changing Zen profile files.",
+    )
     return parser.parse_args()
 
 
@@ -539,6 +552,7 @@ def import_arc_export(
     arc_export_file: str | Path = "arc_pinned_tabs_export.json",
     nuke: bool = False,
     nuke_only: bool = False,
+    create_backups: bool = True,
 ) -> bool:
     """Import an Arc export into the resolved Zen profile."""
     try:
@@ -551,7 +565,7 @@ def import_arc_export(
     nuke_timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
 
     if nuke or nuke_only:
-        nuke_zen_profile(profile, nuke_timestamp)
+        nuke_zen_profile(profile, nuke_timestamp, create_backups=create_backups)
         if nuke_only:
             return True
 
@@ -667,8 +681,8 @@ def import_arc_export(
     zen_data['lastCollected'] = base_timestamp
 
     # Write back
-    write_mozilla_lz4(sessions_file, zen_data)
-    sync_sessionstore(profile, zen_data, nuke=nuke)
+    write_mozilla_lz4(sessions_file, zen_data, create_backup=create_backups)
+    sync_sessionstore(profile, zen_data, nuke=nuke, create_backups=create_backups)
 
     logger.info(f"\n🎉 Migration Complete!")
     logger.info(f"   Workspaces: {len(zen_data['spaces'])}")
@@ -687,6 +701,7 @@ def main():
         arc_export_file=args.arc_export,
         nuke=args.nuke,
         nuke_only=args.nuke_only,
+        create_backups=not args.no_backups,
     )
 
 

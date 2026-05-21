@@ -204,7 +204,7 @@ def spaces_from_session(data: Dict[str, Any]) -> list[Dict[str, Any]]:
     return data.get("spaces", [])
 
 
-def update_file(path: Path, themes: Dict[str, Dict[str, Any]], timestamp: str) -> int:
+def update_file(path: Path, themes: Dict[str, Dict[str, Any]], timestamp: str, create_backups: bool = True) -> int:
     if not path.exists():
         logger.info(f"Skipping missing file: {path}")
         return 0
@@ -212,14 +212,19 @@ def update_file(path: Path, themes: Dict[str, Dict[str, Any]], timestamp: str) -
     data = read_mozilla_lz4(path)
     changed = update_space_themes(spaces_from_session(data), themes)
     if changed:
-        backup(path, timestamp)
-        write_mozilla_lz4(path, data)
+        if create_backups:
+            backup(path, timestamp)
+        write_mozilla_lz4(path, data, create_backup=False)
 
     logger.info(f"{path.name}: changed {changed} workspace themes")
     return changed
 
 
-def sync_workspace_themes(arc_profile: str | Path | None = None, zen_profile: str | Path | None = None) -> bool:
+def sync_workspace_themes(
+    arc_profile: str | Path | None = None,
+    zen_profile: str | Path | None = None,
+    create_backups: bool = True,
+) -> bool:
     """Sync Arc workspace themes into Zen workspaces."""
     profile = resolve_zen_profile(zen_profile)
     themes = arc_workspace_themes(arc_profile)
@@ -243,7 +248,7 @@ def sync_workspace_themes(arc_profile: str | Path | None = None, zen_profile: st
 
     total = 0
     for path in files:
-        total += update_file(path, themes, timestamp)
+        total += update_file(path, themes, timestamp, create_backups=create_backups)
 
     logger.info(f"Done. Changed {total} workspace theme fields across Zen session files.")
     return True
@@ -259,8 +264,13 @@ def main() -> bool:
         "--zen-profile",
         help="Path to a Zen profile directory, or a Zen root containing profiles.ini.",
     )
+    parser.add_argument(
+        "--no-backups",
+        action="store_true",
+        help="Do not create backups before changing Zen profile files.",
+    )
     args = parser.parse_args()
-    return sync_workspace_themes(args.arc_profile, args.zen_profile)
+    return sync_workspace_themes(args.arc_profile, args.zen_profile, create_backups=not args.no_backups)
 
 
 if __name__ == "__main__":

@@ -33,6 +33,9 @@ class MigrationOptions:
     folder_states: bool = True
     workspace_icons: bool = True
     workspace_themes: bool = True
+    skip_orphaned: bool = True
+    create_backups: bool = True
+    auto_close_zen: bool = True
 
 
 @dataclass(frozen=True)
@@ -65,19 +68,33 @@ def _report(emit_line: LineCallback | None, line: str) -> None:
         logger.info(line)
 
 
+def is_orphaned_space(space) -> bool:
+    return space.space_id == "orphaned-essential-tabs" or space.space_name == "Orphaned"
+
+
 def extract_arc_data(
     arc_profile: str | Path | None,
     export_file: str | Path,
     emit_line: LineCallback | None = None,
+    skip_orphaned: bool = True,
 ) -> dict:
     """Extract Arc sidebar data and write the intermediate JSON export."""
     export_path = Path(export_file).expanduser()
     export_path.parent.mkdir(parents=True, exist_ok=True)
 
     extractor = ArcPinnedTabExtractor(arc_profile)
-    arc_spaces = extractor.extract_pinned_tabs()
+    arc_spaces = extractor.extract_pinned_tabs(include_orphaned=not skip_orphaned)
     if not arc_spaces:
         raise RuntimeError("No Arc tabs or folders found to migrate.")
+
+    if skip_orphaned:
+        orphaned_spaces = [space for space in arc_spaces if is_orphaned_space(space)]
+        arc_spaces = [space for space in arc_spaces if not is_orphaned_space(space)]
+        if orphaned_spaces:
+            skipped_tabs = sum(len(space.pinned_tabs) for space in orphaned_spaces)
+            _report(emit_line, f'Skipped "Orphaned" workspace ({skipped_tabs} tabs)')
+        if not arc_spaces:
+            raise RuntimeError('Only the "Orphaned" Arc workspace was found, and skipping it is enabled.')
 
     if not extractor.export_to_json(arc_spaces, export_path):
         raise RuntimeError("Failed to write Arc export.")
@@ -98,7 +115,13 @@ def migration_steps(options: MigrationOptions, export_file: Path) -> list[Migrat
     steps = [
         MigrationStep(
             "Extract Arc sidebar data",
-            lambda: bool(extract_arc_data(options.arc_profile, export_file)),
+            lambda: bool(
+                extract_arc_data(
+                    options.arc_profile,
+                    export_file,
+                    skip_orphaned=options.skip_orphaned,
+                )
+            ),
         ),
         MigrationStep(
             "Import tabs, folders, workspaces, and session state",
@@ -106,6 +129,7 @@ def migration_steps(options: MigrationOptions, export_file: Path) -> list[Migrat
                 zen_profile=options.zen_profile,
                 arc_export_file=export_file,
                 nuke=options.nuke,
+                create_backups=options.create_backups,
             ),
         ),
     ]
@@ -119,6 +143,7 @@ def migration_steps(options: MigrationOptions, export_file: Path) -> list[Migrat
                     arc_profile=options.arc_profile,
                     zen_profile=options.zen_profile,
                     export_file=export_file,
+                    create_backups=options.create_backups,
                 ),
             ),
         ),
@@ -129,6 +154,7 @@ def migration_steps(options: MigrationOptions, export_file: Path) -> list[Migrat
                 lambda: sync_folder_states(
                     arc_profile=options.arc_profile,
                     zen_profile=options.zen_profile,
+                    create_backups=options.create_backups,
                 ),
             ),
         ),
@@ -139,6 +165,7 @@ def migration_steps(options: MigrationOptions, export_file: Path) -> list[Migrat
                 lambda: sync_workspace_icons(
                     arc_profile=options.arc_profile,
                     zen_profile=options.zen_profile,
+                    create_backups=options.create_backups,
                 ),
             ),
         ),
@@ -149,6 +176,7 @@ def migration_steps(options: MigrationOptions, export_file: Path) -> list[Migrat
                 lambda: sync_workspace_themes(
                     arc_profile=options.arc_profile,
                     zen_profile=options.zen_profile,
+                    create_backups=options.create_backups,
                 ),
             ),
         ),
@@ -203,8 +231,8 @@ def _run_migration_with_export(
     return True
 
 
-def nuke_zen_profile_only(zen_profile: str | Path | None = None) -> bool:
+def nuke_zen_profile_only(zen_profile: str | Path | None = None, create_backups: bool = True) -> bool:
     """Clear the target Zen profile without importing Arc data."""
-    if not import_arc_export(zen_profile=zen_profile, nuke=True, nuke_only=True):
+    if not import_arc_export(zen_profile=zen_profile, nuke=True, nuke_only=True, create_backups=create_backups):
         raise RuntimeError("Zen profile cleanup failed")
     return True

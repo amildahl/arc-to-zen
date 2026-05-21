@@ -36,6 +36,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Only clear the selected Zen profile; do not import Arc data.",
     )
+    parser.add_argument(
+        "--include-orphaned",
+        action="store_true",
+        help='Import Arc essential tabs that could not be matched to a workspace into an "Orphaned" workspace.',
+    )
+    parser.add_argument(
+        "--no-backups",
+        action="store_true",
+        help="Do not create backups before changing Zen profile files.",
+    )
     parser.add_argument("--no-favicons", action="store_true", help="Do not copy cached Arc favicons.")
     parser.add_argument(
         "--no-folder-states",
@@ -56,7 +66,7 @@ def main() -> int:
     args = parse_args()
 
     if args.nuke_only:
-        nuke_zen_profile_only(args.zen_profile)
+        nuke_zen_profile_only(args.zen_profile, create_backups=not args.no_backups)
         return 0
 
     options = MigrationOptions(
@@ -68,6 +78,8 @@ def main() -> int:
         folder_states=not args.no_folder_states,
         workspace_icons=not args.no_workspace_icons,
         workspace_themes=not args.no_workspace_themes,
+        skip_orphaned=not args.include_orphaned,
+        create_backups=not args.no_backups,
     )
     run_migration(options)
     return 0

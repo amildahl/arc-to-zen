@@ -128,7 +128,7 @@ def backup(path: Path, timestamp: str):
     logger.info(f"✅ Backed up {path.name} to {backup_path.name}")
 
 
-def update_lz4_file(path: Path, icons: Dict[str, str], timestamp: str) -> int:
+def update_lz4_file(path: Path, icons: Dict[str, str], timestamp: str, create_backups: bool = True) -> int:
     if not path.exists():
         logger.info(f"Skipping missing file: {path}")
         return 0
@@ -143,8 +143,9 @@ def update_lz4_file(path: Path, icons: Dict[str, str], timestamp: str) -> int:
 
     updated = apply_icons_to_tabs(tabs, icons)
     if updated:
-        backup(path, timestamp)
-        write_mozilla_lz4(path, data)
+        if create_backups:
+            backup(path, timestamp)
+        write_mozilla_lz4(path, data, create_backup=False)
 
     logger.info(f"{path.name}: updated {updated} tab images")
     return updated
@@ -154,6 +155,7 @@ def migrate_favicons(
     arc_profile: str | Path | None = None,
     zen_profile: str | Path | None = None,
     export_file: str | Path = "arc_pinned_tabs_export.json",
+    create_backups: bool = True,
 ) -> bool:
     """Copy Arc favicon images into migrated Zen session tabs."""
     export_file = Path(export_file).expanduser()
@@ -174,7 +176,7 @@ def migrate_favicons(
 
     total = 0
     for path in files:
-        total += update_lz4_file(path, icons, timestamp)
+        total += update_lz4_file(path, icons, timestamp, create_backups=create_backups)
 
     logger.info(f"Done. Updated {total} tab image fields across Zen session files.")
     return True
@@ -195,8 +197,13 @@ def main() -> bool:
         default="arc_pinned_tabs_export.json",
         help="Path to the Arc export JSON produced by the extractor.",
     )
+    parser.add_argument(
+        "--no-backups",
+        action="store_true",
+        help="Do not create backups before changing Zen profile files.",
+    )
     args = parser.parse_args()
-    return migrate_favicons(args.arc_profile, args.zen_profile, args.export_file)
+    return migrate_favicons(args.arc_profile, args.zen_profile, args.export_file, create_backups=not args.no_backups)
 
 
 if __name__ == "__main__":

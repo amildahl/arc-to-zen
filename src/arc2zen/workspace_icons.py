@@ -82,7 +82,7 @@ def backup(path: Path, timestamp: str):
     logger.info(f"✅ Backed up {path.name} to {backup_path.name}")
 
 
-def update_file(path: Path, icons: Dict[str, str], timestamp: str) -> int:
+def update_file(path: Path, icons: Dict[str, str], timestamp: str, create_backups: bool = True) -> int:
     if not path.exists():
         logger.info(f"Skipping missing file: {path}")
         return 0
@@ -95,14 +95,19 @@ def update_file(path: Path, icons: Dict[str, str], timestamp: str) -> int:
 
     changed = update_space_icons(spaces, icons)
     if changed:
-        backup(path, timestamp)
-        write_mozilla_lz4(path, data)
+        if create_backups:
+            backup(path, timestamp)
+        write_mozilla_lz4(path, data, create_backup=False)
 
     logger.info(f"{path.name}: changed {changed} workspace icons")
     return changed
 
 
-def sync_workspace_icons(arc_profile: str | Path | None = None, zen_profile: str | Path | None = None) -> bool:
+def sync_workspace_icons(
+    arc_profile: str | Path | None = None,
+    zen_profile: str | Path | None = None,
+    create_backups: bool = True,
+) -> bool:
     """Sync Arc space icons into Zen workspaces."""
     profile = resolve_zen_profile(zen_profile)
     icons = arc_workspace_icons(arc_profile)
@@ -119,7 +124,7 @@ def sync_workspace_icons(arc_profile: str | Path | None = None, zen_profile: str
 
     total = 0
     for path in files:
-        total += update_file(path, icons, timestamp)
+        total += update_file(path, icons, timestamp, create_backups=create_backups)
 
     logger.info(f"Done. Changed {total} workspace icon fields across Zen session files.")
     return True
@@ -135,8 +140,13 @@ def main() -> bool:
         "--zen-profile",
         help="Path to a Zen profile directory, or a Zen root containing profiles.ini.",
     )
+    parser.add_argument(
+        "--no-backups",
+        action="store_true",
+        help="Do not create backups before changing Zen profile files.",
+    )
     args = parser.parse_args()
-    return sync_workspace_icons(args.arc_profile, args.zen_profile)
+    return sync_workspace_icons(args.arc_profile, args.zen_profile, create_backups=not args.no_backups)
 
 
 if __name__ == "__main__":

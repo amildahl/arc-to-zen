@@ -308,7 +308,14 @@ class MainWindow(QMainWindow):
         self.workspace_icons_check.setChecked(True)
         self.workspace_themes_check = QCheckBox("Workspace colors/themes")
         self.workspace_themes_check.setChecked(True)
-        self.nuke_check = QCheckBox("Clear out Zen profile before migration (backups will be saved next to changed files)")
+        self.skip_orphaned_check = QCheckBox('Skip "Orphaned" workspace')
+        self.skip_orphaned_check.setChecked(True)
+        self.skip_orphaned_check.setToolTip("Skips Arc essential tabs that could not be matched to a real workspace.")
+        self.backups_check = QCheckBox("Create backups for changed files")
+        self.backups_check.setChecked(True)
+        self.auto_close_zen_check = QCheckBox("Automatically close Zen if open")
+        self.auto_close_zen_check.setChecked(True)
+        self.nuke_check = QCheckBox("Clear out Zen profile before migration")
         self.nuke_check.setToolTip("Deletes existing Zen tabs, folders, pins, groups, closed-tab state, and regular bookmarks before importing.")
 
         self.progress = QProgressBar()
@@ -342,6 +349,11 @@ class MainWindow(QMainWindow):
         profile_body.addWidget(self._path_row("Target: Zen profile", self.zen_combo, self.browse_zen))
         layout.addWidget(profile_card)
 
+        options_row = QWidget()
+        options_row_layout = QHBoxLayout(options_row)
+        options_row_layout.setContentsMargins(0, 0, 0, 0)
+        options_row_layout.setSpacing(14)
+
         options_card, options_layout = self._card("Choose what to migrate")
         for checkbox in (
             self.core_check,
@@ -351,7 +363,18 @@ class MainWindow(QMainWindow):
             self.workspace_themes_check,
         ):
             options_layout.addWidget(checkbox)
-        layout.addWidget(options_card)
+
+        settings_card, settings_layout = self._card("Options")
+        for checkbox in (
+            self.skip_orphaned_check,
+            self.backups_check,
+            self.auto_close_zen_check,
+        ):
+            settings_layout.addWidget(checkbox)
+
+        options_row_layout.addWidget(options_card, stretch=1)
+        options_row_layout.addWidget(settings_card, stretch=1)
+        layout.addWidget(options_row)
 
         danger_card, danger_layout = self._card("Danger Zone", danger=True)
         danger_layout.addWidget(self.nuke_check)
@@ -383,6 +406,7 @@ class MainWindow(QMainWindow):
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.setSpacing(8)
         outer_layout.addLayout(body_layout)
+        outer_layout.addStretch(1)
 
         return frame, body_layout
 
@@ -431,6 +455,9 @@ class MainWindow(QMainWindow):
             folder_states=self.folder_states_check.isChecked(),
             workspace_icons=self.workspace_icons_check.isChecked(),
             workspace_themes=self.workspace_themes_check.isChecked(),
+            skip_orphaned=self.skip_orphaned_check.isChecked(),
+            create_backups=self.backups_check.isChecked(),
+            auto_close_zen=self.auto_close_zen_check.isChecked(),
         )
 
     def start_migration(self):
@@ -443,7 +470,7 @@ class MainWindow(QMainWindow):
         if not self.confirm_operation(config):
             return
 
-        if not self.ensure_zen_closed():
+        if not self.ensure_zen_closed(config):
             return
 
         self.log.clear()
@@ -469,33 +496,22 @@ class MainWindow(QMainWindow):
         response.setDefaultButton(QMessageBox.Cancel if config.nuke else QMessageBox.Ok)
         return response.exec() == QMessageBox.Ok
 
-    def ensure_zen_closed(self) -> bool:
+    def ensure_zen_closed(self, config: MigrationOptions) -> bool:
         processes = zen_processes()
         if not processes:
             return True
 
         names = ", ".join(f"{process.info.get('name')} ({process.pid})" for process in processes)
-        response = QMessageBox.question(
-            self,
-            "Close Zen Browser",
-            f"Zen appears to be running:\n{names}\n\nClose Zen now before migration?",
-            QMessageBox.Cancel | QMessageBox.Ok,
-            QMessageBox.Cancel,
-        )
-        if response != QMessageBox.Ok:
+        if not config.auto_close_zen:
+            QMessageBox.critical(
+                self,
+                "Zen is running",
+                f"Zen is running and automatic close is disabled:\n{names}\n\nClose Zen and start the migration again.",
+            )
             return False
 
         alive = terminate_zen_processes(processes)
         if alive:
-            force = QMessageBox.warning(
-                self,
-                "Zen did not close",
-                "Zen did not exit after a graceful close request. Force quit it now?",
-                QMessageBox.Cancel | QMessageBox.Ok,
-                QMessageBox.Cancel,
-            )
-            if force != QMessageBox.Ok:
-                return False
             alive = kill_zen_processes(alive)
 
         if alive:

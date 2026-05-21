@@ -70,7 +70,7 @@ class ArcPinnedTabExtractor:
         self.arc_profile = resolve_arc_profile(arc_profile_path)
         self.arc_sidebar_file = self.arc_profile / "StorableSidebar.json"
 
-    def extract_pinned_tabs(self) -> List[ArcSpace]:
+    def extract_pinned_tabs(self, include_orphaned: bool = True) -> List[ArcSpace]:
         """Extract all pinned tabs organized by spaces with folder structure."""
         if not self.arc_sidebar_file.exists():
             logger.error(f"Arc StorableSidebar.json not found: {self.arc_sidebar_file}")
@@ -81,13 +81,13 @@ class ArcPinnedTabExtractor:
                 sidebar_data = json.load(f)
 
             logger.info("✅ Loaded Arc StorableSidebar.json")
-            return self._parse_local_sidebar_data(sidebar_data)
+            return self._parse_local_sidebar_data(sidebar_data, include_orphaned=include_orphaned)
 
         except Exception as e:
             logger.error(f"Failed to parse StorableSidebar.json: {e}")
             return []
 
-    def _parse_local_sidebar_data(self, data: Dict) -> List[ArcSpace]:
+    def _parse_local_sidebar_data(self, data: Dict, include_orphaned: bool = True) -> List[ArcSpace]:
         """Parse the local sidebar data structure (much simpler approach)."""
         arc_spaces = []
 
@@ -361,19 +361,22 @@ class ArcPinnedTabExtractor:
                 if orphaned_tabs:
                     logger.info(f"  📦 Found {len(orphaned_tabs)} orphaned Essential tabs from inactive profiles")
 
-                    # Create a new "Orphaned" space for these tabs
-                    orphaned_space_id = "orphaned-essential-tabs"
-                    orphaned_space = ArcSpace(
-                        space_id=orphaned_space_id,
-                        space_name="Orphaned",
-                        pinned_tabs=orphaned_tabs,
-                        folders=[],
-                        icon="🔍",  # Magnifying glass icon for orphaned items
-                        color=None
-                    )
-                    arc_spaces.append(orphaned_space)
-                    logger.info(f"    ⭐ Created new 'Orphaned' space with {len(orphaned_tabs)} Essential tabs")
-                    logger.info(f"    💡 These tabs will appear in a separate 'Orphaned' workspace in Zen")
+                    if include_orphaned:
+                        # Create a new "Orphaned" space for these tabs.
+                        orphaned_space_id = "orphaned-essential-tabs"
+                        orphaned_space = ArcSpace(
+                            space_id=orphaned_space_id,
+                            space_name="Orphaned",
+                            pinned_tabs=orphaned_tabs,
+                            folders=[],
+                            icon="🔍",  # Magnifying glass icon for orphaned items
+                            color=None
+                        )
+                        arc_spaces.append(orphaned_space)
+                        logger.info(f"    ⭐ Created new 'Orphaned' space with {len(orphaned_tabs)} Essential tabs")
+                        logger.info(f"    💡 These tabs will appear in a separate 'Orphaned' workspace in Zen")
+                    else:
+                        logger.info(f"    ⏭️ Skipping 'Orphaned' workspace with {len(orphaned_tabs)} Essential tabs")
 
         logger.info(f"Found {len(arc_spaces)} spaces with pinned tabs")
         return arc_spaces

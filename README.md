@@ -32,10 +32,12 @@ Pick the archive for your OS:
 2. Open the downloaded app.
 3. Choose the Arc data folder and target Zen profile.
 4. Choose what to migrate.
-5. Optionally enable **Clear out Zen profile before migration** to rebuild Zen
-   from Arc. Backups are written next to changed Zen files.
-6. Start the migration and wait for the progress log to finish.
-7. Open Zen.
+5. Use **Options** to skip the synthetic `Orphaned` workspace, create backups,
+   and let the app close Zen automatically.
+6. Optionally enable **Clear out Zen profile before migration** to rebuild Zen
+   from Arc.
+7. Start the migration and wait for the progress log to finish.
+8. Open Zen.
 
 ## macOS Unsigned App
 
@@ -74,12 +76,15 @@ python cli.py --nuke
 ```
 
 `--nuke` clears existing Zen tabs, folders, pins, groups, closed-tab state, and
-regular bookmarks before importing Arc data. It creates backups first.
+regular bookmarks before importing Arc data. Backups are created unless
+`--no-backups` is used.
 
 Useful switches:
 
 - `--arc-profile PATH`
 - `--zen-profile PATH`
+- `--include-orphaned`
+- `--no-backups`
 - `--no-favicons`
 - `--no-folder-states`
 - `--no-workspace-icons`

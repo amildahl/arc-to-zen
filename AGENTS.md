@@ -29,7 +29,8 @@ python cli.py --nuke
 
 `--nuke` is destructive for the target Zen profile: it clears tabs, folders,
 pins, groups, closed-tab state, and regular bookmarks before importing Arc data.
-Use `--nuke-only` to perform only that cleanup.
+Use `--nuke-only` to perform only that cleanup. Backups are controlled by
+`create_backups` / `--no-backups`.
 
 ## Main Files
 
@@ -51,6 +52,8 @@ Use `--nuke-only` to perform only that cleanup.
   - Shared migration orchestration used by both CLI and GUI.
   - Owns the ordered step list for core import, favicons, folder states,
     workspace icons, and workspace themes.
+  - Filters the synthetic `Orphaned` workspace by default unless explicitly
+    disabled.
 
 - `src/arc2zen/cli.py`
   - Unified CLI with switches for profile selection, nuke mode, nuke-only mode,
@@ -59,6 +62,8 @@ Use `--nuke-only` to perform only that cleanup.
 - `src/arc2zen/desktop.py`
   - PySide6 GUI wrapper around the shared migration orchestrator.
   - Lets users pick Arc/Zen profiles, optional migration steps, and nuke mode.
+  - Offers runtime options for skipping `Orphaned`, creating backups, and
+    closing Zen automatically.
   - Confirms pending parameters, closes Zen before running, then streams
     migration progress into the UI.
   - Uses a temporary export file so GUI runs do not leave `arc_pinned_tabs_export.json`.
