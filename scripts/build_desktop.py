@@ -66,6 +66,8 @@ def run_pyinstaller(label: str) -> Path:
         pyinstaller_name(),
         "--hidden-import",
         "lz4.block",
+        "--paths",
+        str(REPO_ROOT / "src"),
         "--icon",
         str(icon_path()),
         "--add-data",
@@ -76,7 +78,7 @@ def run_pyinstaller(label: str) -> Path:
         str(work_dir),
         "--specpath",
         str(spec_dir),
-        str(REPO_ROOT / "desktop_app.py"),
+        str(REPO_ROOT / "desktop.py"),
     ]
 
     if system_name() in {"darwin", "windows"}:

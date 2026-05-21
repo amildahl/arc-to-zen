@@ -5,13 +5,9 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import sys
-import tempfile
-from dataclasses import dataclass
 from pathlib import Path
 from ctypes.util import find_library
-from typing import Callable
 
 # PyInstaller windowed builds on Windows can start with no console streams.
 if sys.stdout is None:
@@ -41,16 +37,11 @@ try:
     )
 except ImportError as exc:
     print("Missing desktop dependency:", exc)
-    print("Install dependencies with: pip install -r requirements-desktop.txt")
+    print('Install dependencies with: pip install -e ".[desktop]"')
     raise
 
-from src.profile_paths import discover_arc_profiles, discover_zen_profiles, is_arc_profile, resolve_zen_profile
-from src.arc_pinned_tab_extractor import ArcPinnedTabExtractor
-from migrate_arc_favicons import migrate_favicons
-from sync_arc_folder_states import sync_folder_states
-from sync_arc_workspace_icons import sync_workspace_icons
-from sync_arc_workspace_themes import sync_workspace_themes
-from zen_sessions_importer_v4 import import_arc_export
+from .migration import MigrationOptions, run_migration
+from .profile_paths import discover_arc_profiles, discover_zen_profiles, is_arc_profile, resolve_zen_profile
 
 
 APP_STYLESHEET = """
@@ -158,7 +149,6 @@ QTextEdit {
     font-size: 12px;
 }
 """
-LOG_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} - [A-Z]+ - ")
 ZEN_PROCESS_NAMES = {
     "zen",
     "zen.exe",
@@ -171,41 +161,19 @@ ZEN_PROCESS_NAMES = {
 }
 
 
-@dataclass
-class MigrationConfig:
-    arc_profile: Path
-    zen_profile: Path
-    nuke: bool
-    favicons: bool
-    folder_states: bool
-    workspace_icons: bool
-    workspace_themes: bool
-
-
 def format_path(path: Path) -> str:
     return str(path.expanduser())
 
 
 def resource_path(*parts: str) -> Path:
-    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-    return base.joinpath(*parts)
+    if hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS).joinpath(*parts)
 
-
-def clean_log_line(line: str) -> str:
-    return LOG_PREFIX_RE.sub("", line)
-
-
-class WorkerLogHandler(logging.Handler):
-    def __init__(self, emit_line: Callable[[str], None]):
-        super().__init__(logging.INFO)
-        self.emit_line = emit_line
-        self.setFormatter(logging.Formatter("%(message)s"))
-
-    def emit(self, record: logging.LogRecord) -> None:
-        try:
-            self.emit_line(clean_log_line(self.format(record)))
-        except Exception:
-            self.handleError(record)
+    repo_root = Path(__file__).resolve().parents[2]
+    candidate = repo_root.joinpath(*parts)
+    if candidate.exists():
+        return candidate
+    return Path(__file__).resolve().parent.joinpath(*parts)
 
 
 def polish_macos_window(window: QMainWindow) -> bool:
@@ -302,7 +270,7 @@ class MigrationWorker(QThread):
     step = Signal(int, int, str)
     done = Signal(bool, str)
 
-    def __init__(self, config: MigrationConfig):
+    def __init__(self, config: MigrationOptions):
         super().__init__()
         self.config = config
 
@@ -313,100 +281,8 @@ class MigrationWorker(QThread):
             self.done.emit(False, str(exc))
 
     def _run(self):
-        with tempfile.TemporaryDirectory(prefix="arc-to-zen-") as temp_dir:
-            export_file = Path(temp_dir) / "arc_pinned_tabs_export.json"
-            steps = [
-                (
-                    "Extract Arc sidebar data",
-                    lambda: self._extract_arc_data(export_file),
-                ),
-                (
-                    "Import tabs, folders, workspaces, and session state",
-                    lambda: import_arc_export(
-                        zen_profile=self.config.zen_profile,
-                        arc_export_file=export_file,
-                        nuke=self.config.nuke,
-                    ),
-                ),
-            ]
-
-            if self.config.favicons:
-                steps.append(
-                    (
-                        "Copy favicons",
-                        lambda: migrate_favicons(
-                            arc_profile=self.config.arc_profile,
-                            zen_profile=self.config.zen_profile,
-                            export_file=export_file,
-                        ),
-                    )
-                )
-
-            if self.config.folder_states:
-                steps.append(
-                    (
-                        "Sync pinned-folder open/closed state",
-                        lambda: sync_folder_states(
-                            arc_profile=self.config.arc_profile,
-                            zen_profile=self.config.zen_profile,
-                        ),
-                    )
-                )
-
-            if self.config.workspace_icons:
-                steps.append(
-                    (
-                        "Sync workspace icons",
-                        lambda: sync_workspace_icons(
-                            arc_profile=self.config.arc_profile,
-                            zen_profile=self.config.zen_profile,
-                        ),
-                    )
-                )
-
-            if self.config.workspace_themes:
-                steps.append(
-                    (
-                        "Sync workspace themes",
-                        lambda: sync_workspace_themes(
-                            arc_profile=self.config.arc_profile,
-                            zen_profile=self.config.zen_profile,
-                        ),
-                    )
-                )
-
-            handler = WorkerLogHandler(self.line.emit)
-            root_logger = logging.getLogger()
-            root_logger.addHandler(handler)
-            try:
-                for index, (title, operation) in enumerate(steps, start=1):
-                    self.step.emit(index, len(steps), title)
-                    self.line.emit(f"\n[{index}/{len(steps)}] {title}")
-                    result = operation()
-                    if result is False:
-                        raise RuntimeError(f"{title} failed")
-            finally:
-                root_logger.removeHandler(handler)
-
+        run_migration(self.config, emit_line=self.line.emit, on_step=self.step.emit)
         self.done.emit(True, "Migration finished successfully.")
-
-    def _extract_arc_data(self, export_file: Path) -> bool:
-        extractor = ArcPinnedTabExtractor(self.config.arc_profile)
-        arc_spaces = extractor.extract_pinned_tabs()
-        if not arc_spaces:
-            raise RuntimeError("No Arc tabs or folders found to migrate.")
-
-        if not extractor.export_to_json(arc_spaces, export_file):
-            raise RuntimeError("Failed to write Arc export.")
-
-        summary = extractor.get_extraction_summary(arc_spaces)
-        self.line.emit(
-            "Extracted "
-            f"{summary['total_spaces']} spaces, "
-            f"{summary['total_pinned_tabs']} tabs, "
-            f"{summary['total_folders']} folders"
-        )
-        return True
 
 
 class MainWindow(QMainWindow):
@@ -541,13 +417,13 @@ class MainWindow(QMainWindow):
             except Exception:
                 self.zen_combo.setEditText(selected)
 
-    def selected_config(self) -> MigrationConfig:
+    def selected_config(self) -> MigrationOptions:
         arc_profile = Path(self.arc_combo.currentText()).expanduser()
         if not is_arc_profile(arc_profile):
             raise ValueError(f"Arc profile must contain a valid StorableSidebar.json:\n{arc_profile}")
 
         zen_profile = resolve_zen_profile(self.zen_combo.currentText())
-        return MigrationConfig(
+        return MigrationOptions(
             arc_profile=arc_profile,
             zen_profile=zen_profile,
             nuke=self.nuke_check.isChecked(),
@@ -581,7 +457,7 @@ class MainWindow(QMainWindow):
         self.worker.done.connect(self.finish_migration)
         self.worker.start()
 
-    def confirm_operation(self, config: MigrationConfig) -> bool:
+    def confirm_operation(self, config: MigrationOptions) -> bool:
         icon = QMessageBox.Warning if config.nuke else QMessageBox.Question
         response = QMessageBox(
             icon,

@@ -13,10 +13,8 @@ from typing import List, Dict, Optional, Any
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 import logging
-import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from src.profile_paths import resolve_arc_profile
+from .profile_paths import resolve_arc_profile
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -980,7 +978,7 @@ def main():
 
     if not arc_spaces:
         print("❌ No pinned tabs found!")
-        return
+        return False
 
     # Export to JSON
     output_file = Path(args.output).expanduser()
@@ -999,6 +997,8 @@ def main():
         for space_info in summary['spaces_summary']:
             print(f"  • {space_info['name']}: {space_info['pinned_tabs']} tabs, {space_info['folders']} folders")
 
+    return success
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(0 if main() else 1)

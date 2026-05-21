@@ -18,7 +18,7 @@ from datetime import datetime
 import shutil
 import copy
 
-from src.profile_paths import resolve_zen_profile as resolve_zen_profile_path
+from .profile_paths import resolve_zen_profile as resolve_zen_profile_path
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -519,7 +519,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--arc-export",
         default="arc_pinned_tabs_export.json",
-        help="Path to the Arc export JSON produced by arc_pinned_tab_extractor.py.",
+        help="Path to the Arc export JSON produced by the extractor.",
     )
     parser.add_argument(
         "--nuke",
@@ -563,7 +563,7 @@ def import_arc_export(
     arc_export_file = Path(arc_export_file).expanduser()
 
     if not arc_export_file.exists():
-        logger.error("❌ Arc export not found. Run arc_pinned_tab_extractor.py first.")
+        logger.error("❌ Arc export not found. Run cli.py first or provide --arc-export.")
         return False
 
     # Load Arc export

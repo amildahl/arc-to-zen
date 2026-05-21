@@ -1,0 +1,210 @@
+"""Shared migration orchestration for the CLI and desktop app."""
+
+from __future__ import annotations
+
+import logging
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, Iterable
+
+from .extract import ArcPinnedTabExtractor
+from .favicons import migrate_favicons
+from .folder_states import sync_folder_states
+from .sessions import import_arc_export
+from .workspace_icons import sync_workspace_icons
+from .workspace_themes import sync_workspace_themes
+
+logger = logging.getLogger(__name__)
+
+LineCallback = Callable[[str], None]
+StepCallback = Callable[[int, int, str], None]
+
+
+@dataclass(frozen=True)
+class MigrationOptions:
+    """Controls which Arc data is copied into the target Zen profile."""
+
+    arc_profile: str | Path | None = None
+    zen_profile: str | Path | None = None
+    export_file: str | Path | None = None
+    nuke: bool = False
+    favicons: bool = True
+    folder_states: bool = True
+    workspace_icons: bool = True
+    workspace_themes: bool = True
+
+
+@dataclass(frozen=True)
+class MigrationStep:
+    title: str
+    operation: Callable[[], bool]
+
+
+class CallbackLogHandler(logging.Handler):
+    """Forwards package log records to the desktop progress window."""
+
+    def __init__(self, emit_line: LineCallback):
+        super().__init__(logging.INFO)
+        self.emit_line = emit_line
+        self.setFormatter(logging.Formatter("%(message)s"))
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            message = self.format(record)
+            if message:
+                self.emit_line(message)
+        except Exception:
+            self.handleError(record)
+
+
+def _report(emit_line: LineCallback | None, line: str) -> None:
+    if emit_line:
+        emit_line(line)
+    else:
+        logger.info(line)
+
+
+def extract_arc_data(
+    arc_profile: str | Path | None,
+    export_file: str | Path,
+    emit_line: LineCallback | None = None,
+) -> dict:
+    """Extract Arc sidebar data and write the intermediate JSON export."""
+    export_path = Path(export_file).expanduser()
+    export_path.parent.mkdir(parents=True, exist_ok=True)
+
+    extractor = ArcPinnedTabExtractor(arc_profile)
+    arc_spaces = extractor.extract_pinned_tabs()
+    if not arc_spaces:
+        raise RuntimeError("No Arc tabs or folders found to migrate.")
+
+    if not extractor.export_to_json(arc_spaces, export_path):
+        raise RuntimeError("Failed to write Arc export.")
+
+    summary = extractor.get_extraction_summary(arc_spaces)
+    _report(
+        emit_line,
+        "Extracted "
+        f"{summary['total_spaces']} spaces, "
+        f"{summary['total_pinned_tabs']} tabs, "
+        f"{summary['total_folders']} folders",
+    )
+    return summary
+
+
+def migration_steps(options: MigrationOptions, export_file: Path) -> list[MigrationStep]:
+    """Build the ordered migration step list for the selected options."""
+    steps = [
+        MigrationStep(
+            "Extract Arc sidebar data",
+            lambda: bool(extract_arc_data(options.arc_profile, export_file)),
+        ),
+        MigrationStep(
+            "Import tabs, folders, workspaces, and session state",
+            lambda: import_arc_export(
+                zen_profile=options.zen_profile,
+                arc_export_file=export_file,
+                nuke=options.nuke,
+            ),
+        ),
+    ]
+
+    optional_steps: Iterable[tuple[bool, MigrationStep]] = (
+        (
+            options.favicons,
+            MigrationStep(
+                "Copy favicons",
+                lambda: migrate_favicons(
+                    arc_profile=options.arc_profile,
+                    zen_profile=options.zen_profile,
+                    export_file=export_file,
+                ),
+            ),
+        ),
+        (
+            options.folder_states,
+            MigrationStep(
+                "Sync pinned-folder open/closed state",
+                lambda: sync_folder_states(
+                    arc_profile=options.arc_profile,
+                    zen_profile=options.zen_profile,
+                ),
+            ),
+        ),
+        (
+            options.workspace_icons,
+            MigrationStep(
+                "Sync workspace icons",
+                lambda: sync_workspace_icons(
+                    arc_profile=options.arc_profile,
+                    zen_profile=options.zen_profile,
+                ),
+            ),
+        ),
+        (
+            options.workspace_themes,
+            MigrationStep(
+                "Sync workspace themes",
+                lambda: sync_workspace_themes(
+                    arc_profile=options.arc_profile,
+                    zen_profile=options.zen_profile,
+                ),
+            ),
+        ),
+    )
+    steps.extend(step for enabled, step in optional_steps if enabled)
+    return steps
+
+
+def run_migration(
+    options: MigrationOptions,
+    emit_line: LineCallback | None = None,
+    on_step: StepCallback | None = None,
+) -> bool:
+    """Run a complete Arc to Zen migration."""
+    if options.export_file is not None:
+        export_path = Path(options.export_file).expanduser()
+        return _run_migration_with_export(options, export_path, emit_line, on_step)
+
+    with tempfile.TemporaryDirectory(prefix="arc-to-zen-") as temp_dir:
+        export_path = Path(temp_dir) / "arc_pinned_tabs_export.json"
+        return _run_migration_with_export(options, export_path, emit_line, on_step)
+
+
+def _run_migration_with_export(
+    options: MigrationOptions,
+    export_file: Path,
+    emit_line: LineCallback | None,
+    on_step: StepCallback | None,
+) -> bool:
+    steps = migration_steps(options, export_file)
+    handler = CallbackLogHandler(emit_line) if emit_line else None
+    root_logger = logging.getLogger()
+
+    old_level = root_logger.level
+    if handler:
+        root_logger.addHandler(handler)
+        if old_level > logging.INFO:
+            root_logger.setLevel(logging.INFO)
+
+    try:
+        for index, step in enumerate(steps, start=1):
+            if on_step:
+                on_step(index, len(steps), step.title)
+            _report(emit_line, f"\n[{index}/{len(steps)}] {step.title}")
+            if step.operation() is False:
+                raise RuntimeError(f"{step.title} failed")
+    finally:
+        if handler:
+            root_logger.removeHandler(handler)
+            root_logger.setLevel(old_level)
+
+    return True
+
+
+def nuke_zen_profile_only(zen_profile: str | Path | None = None) -> bool:
+    """Clear the target Zen profile without importing Arc data."""
+    if not import_arc_export(zen_profile=zen_profile, nuke=True, nuke_only=True):
+        raise RuntimeError("Zen profile cleanup failed")
+    return True

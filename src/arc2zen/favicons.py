@@ -11,8 +11,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from zen_sessions_importer_v4 import read_mozilla_lz4, resolve_zen_profile, write_mozilla_lz4
-from src.profile_paths import arc_favicons_paths
+from .sessions import read_mozilla_lz4, resolve_zen_profile, write_mozilla_lz4
+from .profile_paths import arc_favicons_paths
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -158,7 +158,7 @@ def migrate_favicons(
     """Copy Arc favicon images into migrated Zen session tabs."""
     export_file = Path(export_file).expanduser()
     if not export_file.exists():
-        logger.error("Arc export not found. Run src/arc_pinned_tab_extractor.py first.")
+        logger.error("Arc export not found. Run cli.py first or provide --export-file.")
         return False
 
     profile = resolve_zen_profile(zen_profile)
@@ -193,7 +193,7 @@ def main() -> bool:
     parser.add_argument(
         "--export-file",
         default="arc_pinned_tabs_export.json",
-        help="Path to the Arc export JSON produced by arc_pinned_tab_extractor.py.",
+        help="Path to the Arc export JSON produced by the extractor.",
     )
     args = parser.parse_args()
     return migrate_favicons(args.arc_profile, args.zen_profile, args.export_file)

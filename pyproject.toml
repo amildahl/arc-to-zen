@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "arc2zen"
+version = "0.2.0"
+description = "Migrate Arc Browser sidebar data into Zen Browser."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "lz4>=4.3.0",
+]
+
+[project.optional-dependencies]
+desktop = [
+  "psutil>=5.9.0",
+  "PySide6>=6.7.0",
+]
+build = [
+  "psutil>=5.9.0",
+  "PySide6>=6.7.0",
+  "pyinstaller>=6.10,<7",
+]
+
+[project.scripts]
+arc2zen = "arc2zen.cli:main"
+
+[project.gui-scripts]
+arc2zen-desktop = "arc2zen.desktop:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

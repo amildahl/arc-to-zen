@@ -9,8 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple
 
-from zen_sessions_importer_v4 import read_mozilla_lz4, resolve_zen_profile, write_mozilla_lz4
-from src.profile_paths import arc_json_path
+from .sessions import read_mozilla_lz4, resolve_zen_profile, write_mozilla_lz4
+from .profile_paths import arc_json_path
 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

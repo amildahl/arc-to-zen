@@ -10,11 +10,11 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from PySide6.QtWidgets import QApplication
 
-from desktop_app import APP_STYLESHEET, MainWindow
+from arc2zen.desktop import APP_STYLESHEET, MainWindow
 
 
 def main() -> int:
