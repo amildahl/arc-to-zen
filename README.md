@@ -37,8 +37,19 @@ Pick the archive for your OS:
 6. Start the migration and wait for the progress log to finish.
 7. Open Zen.
 
-On macOS, unzip the download and open `Arc to Zen.app`. If Gatekeeper blocks an
-unsigned build, right-click the app and choose **Open**.
+## macOS Unsigned App
+
+The macOS build is not signed yet, so Gatekeeper may block it the first time.
+
+![macOS Privacy and Security Open Anyway button](docs/open-anyway.png)
+
+1. Unzip the macOS download.
+2. Try to open `Arc to Zen.app` once.
+3. When macOS blocks it, open **System Settings**.
+4. Go to **Privacy & Security**.
+5. Scroll to **Security** and click **Open Anyway** next to `Arc to Zen.app`.
+6. Confirm with **Open Anyway** and enter your password or use Touch ID if asked.
+7. Open `Arc to Zen.app` again.
 
 ## CLI
 
