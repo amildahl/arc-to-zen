@@ -19,7 +19,6 @@ try:
         QCheckBox,
         QComboBox,
         QFileDialog,
-        QFormLayout,
         QFrame,
         QHBoxLayout,
         QLabel,
@@ -394,13 +393,8 @@ class MainWindow(QMainWindow):
         layout.setSpacing(14)
 
         profile_card, profile_body = self._card("Profiles")
-        profile_layout = QFormLayout()
-        profile_layout.setContentsMargins(0, 0, 0, 0)
-        profile_layout.setHorizontalSpacing(18)
-        profile_layout.setVerticalSpacing(12)
-        profile_layout.addRow("Source: Arc data folder", self._path_row(self.arc_combo, self.browse_arc))
-        profile_layout.addRow("Target: Zen profile", self._path_row(self.zen_combo, self.browse_zen))
-        profile_body.addLayout(profile_layout)
+        profile_body.addWidget(self._path_row("Source: Arc data folder", self.arc_combo, self.browse_arc))
+        profile_body.addWidget(self._path_row("Target: Zen profile", self.zen_combo, self.browse_zen))
         layout.addWidget(profile_card)
 
         options_card, options_layout = self._card("Choose what to migrate")
@@ -444,12 +438,20 @@ class MainWindow(QMainWindow):
 
         return frame, body_layout
 
-    def _path_row(self, combo: QComboBox, browse_callback) -> QWidget:
+    def _path_row(self, label_text: str, combo: QComboBox, browse_callback) -> QWidget:
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        label = QLabel(label_text)
+        label.setMinimumWidth(150)
+        label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+
         browse_button = QPushButton("Browse...")
         browse_button.clicked.connect(browse_callback)
+
+        layout.addWidget(label)
         layout.addWidget(combo, stretch=1)
         layout.addWidget(browse_button)
         return row
