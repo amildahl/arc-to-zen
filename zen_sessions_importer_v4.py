@@ -534,12 +534,15 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main():
-    """Import Arc tabs into the resolved Zen profile with proper nested folders."""
-    args = parse_args()
-
+def import_arc_export(
+    zen_profile: str | Path | None = None,
+    arc_export_file: str | Path = "arc_pinned_tabs_export.json",
+    nuke: bool = False,
+    nuke_only: bool = False,
+) -> bool:
+    """Import an Arc export into the resolved Zen profile."""
     try:
-        profile = resolve_zen_profile(args.zen_profile)
+        profile = resolve_zen_profile(zen_profile)
     except Exception as e:
         logger.error(f"❌ Zen profile not found: {e}")
         return False
@@ -547,9 +550,9 @@ def main():
     logger.info(f"✅ Using profile: {profile.name}")
     nuke_timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
 
-    if args.nuke or args.nuke_only:
+    if nuke or nuke_only:
         nuke_zen_profile(profile, nuke_timestamp)
-        if args.nuke_only:
+        if nuke_only:
             return True
 
     sessions_file = profile / "zen-sessions.jsonlz4"
@@ -557,7 +560,7 @@ def main():
         logger.error(f"❌ Zen session file not found: {sessions_file}")
         return False
 
-    arc_export_file = Path(args.arc_export).expanduser()
+    arc_export_file = Path(arc_export_file).expanduser()
 
     if not arc_export_file.exists():
         logger.error("❌ Arc export not found. Run arc_pinned_tab_extractor.py first.")
@@ -665,7 +668,7 @@ def main():
 
     # Write back
     write_mozilla_lz4(sessions_file, zen_data)
-    sync_sessionstore(profile, zen_data, nuke=args.nuke)
+    sync_sessionstore(profile, zen_data, nuke=nuke)
 
     logger.info(f"\n🎉 Migration Complete!")
     logger.info(f"   Workspaces: {len(zen_data['spaces'])}")
@@ -674,6 +677,17 @@ def main():
     logger.info(f"\n💡 Open Zen Browser ({profile.name} profile) to see your Arc tabs with proper nested folders!")
 
     return True
+
+
+def main():
+    """Import Arc tabs into the resolved Zen profile with proper nested folders."""
+    args = parse_args()
+    return import_arc_export(
+        zen_profile=args.zen_profile,
+        arc_export_file=args.arc_export,
+        nuke=args.nuke,
+        nuke_only=args.nuke_only,
+    )
 
 
 if __name__ == "__main__":

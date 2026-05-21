@@ -150,6 +150,36 @@ def update_lz4_file(path: Path, icons: Dict[str, str], timestamp: str) -> int:
     return updated
 
 
+def migrate_favicons(
+    arc_profile: str | Path | None = None,
+    zen_profile: str | Path | None = None,
+    export_file: str | Path = "arc_pinned_tabs_export.json",
+) -> bool:
+    """Copy Arc favicon images into migrated Zen session tabs."""
+    export_file = Path(export_file).expanduser()
+    if not export_file.exists():
+        logger.error("Arc export not found. Run src/arc_pinned_tab_extractor.py first.")
+        return False
+
+    profile = resolve_zen_profile(zen_profile)
+    icons = load_arc_icons(export_file, arc_profile)
+    logger.info(f"Loaded {len(icons)} Arc favicon images for migrated URLs")
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    files = [
+        profile / "zen-sessions.jsonlz4",
+        profile / "sessionstore.jsonlz4",
+        profile / "sessionstore-backups" / "recovery.jsonlz4",
+    ]
+
+    total = 0
+    for path in files:
+        total += update_lz4_file(path, icons, timestamp)
+
+    logger.info(f"Done. Updated {total} tab image fields across Zen session files.")
+    return True
+
+
 def main() -> bool:
     parser = argparse.ArgumentParser(description="Copy Arc favicon images into migrated Zen tabs.")
     parser.add_argument(
@@ -166,29 +196,7 @@ def main() -> bool:
         help="Path to the Arc export JSON produced by arc_pinned_tab_extractor.py.",
     )
     args = parser.parse_args()
-
-    export_file = Path(args.export_file).expanduser()
-    if not export_file.exists():
-        logger.error("Arc export not found. Run src/arc_pinned_tab_extractor.py first.")
-        return False
-
-    profile = resolve_zen_profile(args.zen_profile)
-    icons = load_arc_icons(export_file, args.arc_profile)
-    logger.info(f"Loaded {len(icons)} Arc favicon images for migrated URLs")
-
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    files = [
-        profile / "zen-sessions.jsonlz4",
-        profile / "sessionstore.jsonlz4",
-        profile / "sessionstore-backups" / "recovery.jsonlz4",
-    ]
-
-    total = 0
-    for path in files:
-        total += update_lz4_file(path, icons, timestamp)
-
-    logger.info(f"Done. Updated {total} tab image fields across Zen session files.")
-    return True
+    return migrate_favicons(args.arc_profile, args.zen_profile, args.export_file)
 
 
 if __name__ == "__main__":

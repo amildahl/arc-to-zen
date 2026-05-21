@@ -186,20 +186,10 @@ def update_file(path: Path, states: Dict[FolderKey, bool], timestamp: str) -> tu
     return matched, changed
 
 
-def main() -> bool:
-    parser = argparse.ArgumentParser(description="Sync Arc pinned-folder expanded/collapsed state into Zen.")
-    parser.add_argument(
-        "--arc-profile",
-        help="Path to the Arc profile root containing StorableSidebar.json.",
-    )
-    parser.add_argument(
-        "--zen-profile",
-        help="Path to a Zen profile directory, or a Zen root containing profiles.ini.",
-    )
-    args = parser.parse_args()
-
-    profile = resolve_zen_profile(args.zen_profile)
-    states = arc_folder_states(args.arc_profile)
+def sync_folder_states(arc_profile: str | Path | None = None, zen_profile: str | Path | None = None) -> bool:
+    """Sync Arc pinned-folder expanded/collapsed state into Zen."""
+    profile = resolve_zen_profile(zen_profile)
+    states = arc_folder_states(arc_profile)
     expanded = sum(1 for value in states.values() if value)
     logger.info(f"Loaded Arc states for {len(states)} pinned folders: {expanded} expanded, {len(states) - expanded} collapsed")
 
@@ -217,6 +207,20 @@ def main() -> bool:
 
     logger.info(f"Done. Changed {total_changed} folder/group collapsed fields across Zen session files.")
     return True
+
+
+def main() -> bool:
+    parser = argparse.ArgumentParser(description="Sync Arc pinned-folder expanded/collapsed state into Zen.")
+    parser.add_argument(
+        "--arc-profile",
+        help="Path to the Arc profile root containing StorableSidebar.json.",
+    )
+    parser.add_argument(
+        "--zen-profile",
+        help="Path to a Zen profile directory, or a Zen root containing profiles.ini.",
+    )
+    args = parser.parse_args()
+    return sync_folder_states(args.arc_profile, args.zen_profile)
 
 
 if __name__ == "__main__":

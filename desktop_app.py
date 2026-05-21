@@ -3,13 +3,20 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
-import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
+
+# PyInstaller windowed builds on Windows can start with no console streams.
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w")
 
 try:
     import psutil
@@ -32,13 +39,18 @@ try:
     )
 except ImportError as exc:
     print("Missing desktop dependency:", exc)
-    print("Install dependencies with: pip install -r requirements.txt")
+    print("Install dependencies with: pip install -r requirements-desktop.txt")
     raise
 
 from src.profile_paths import discover_arc_profiles, discover_zen_profiles, is_arc_profile, resolve_zen_profile
+from src.arc_pinned_tab_extractor import ArcPinnedTabExtractor
+from migrate_arc_favicons import migrate_favicons
+from sync_arc_folder_states import sync_folder_states
+from sync_arc_workspace_icons import sync_workspace_icons
+from sync_arc_workspace_themes import sync_workspace_themes
+from zen_sessions_importer_v4 import import_arc_export
 
 
-REPO_ROOT = Path(__file__).resolve().parent
 APP_STYLESHEET = """
 QWidget#Root {
     background: #f6f7f9;
@@ -170,6 +182,19 @@ def clean_log_line(line: str) -> str:
     return LOG_PREFIX_RE.sub("", line)
 
 
+class WorkerLogHandler(logging.Handler):
+    def __init__(self, emit_line: Callable[[str], None]):
+        super().__init__(logging.INFO)
+        self.emit_line = emit_line
+        self.setFormatter(logging.Formatter("%(message)s"))
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self.emit_line(clean_log_line(self.format(record)))
+        except Exception:
+            self.handleError(record)
+
+
 def zen_processes() -> list[psutil.Process]:
     processes = []
     for process in psutil.process_iter(["pid", "name", "exe"]):
@@ -223,37 +248,20 @@ class MigrationWorker(QThread):
             self.done.emit(False, str(exc))
 
     def _run(self):
-        python = sys.executable
-        env = os.environ.copy()
-        env["PYTHONUNBUFFERED"] = "1"
-        env["ARC_PROFILE_PATH"] = format_path(self.config.arc_profile)
-        env["ZEN_PROFILE_PATH"] = format_path(self.config.zen_profile)
-
         with tempfile.TemporaryDirectory(prefix="arc-to-zen-") as temp_dir:
             export_file = Path(temp_dir) / "arc_pinned_tabs_export.json"
             steps = [
                 (
                     "Extract Arc sidebar data",
-                    [
-                        python,
-                        str(REPO_ROOT / "src" / "arc_pinned_tab_extractor.py"),
-                        "--arc-profile",
-                        format_path(self.config.arc_profile),
-                        "--output",
-                        str(export_file),
-                    ],
+                    lambda: self._extract_arc_data(export_file),
                 ),
                 (
                     "Import tabs, folders, workspaces, and session state",
-                    [
-                        python,
-                        str(REPO_ROOT / "zen_sessions_importer_v4.py"),
-                        "--zen-profile",
-                        format_path(self.config.zen_profile),
-                        "--arc-export",
-                        str(export_file),
-                    ]
-                    + (["--nuke"] if self.config.nuke else []),
+                    lambda: import_arc_export(
+                        zen_profile=self.config.zen_profile,
+                        arc_export_file=export_file,
+                        nuke=self.config.nuke,
+                    ),
                 ),
             ]
 
@@ -261,16 +269,11 @@ class MigrationWorker(QThread):
                 steps.append(
                     (
                         "Copy favicons",
-                        [
-                            python,
-                            str(REPO_ROOT / "migrate_arc_favicons.py"),
-                            "--arc-profile",
-                            format_path(self.config.arc_profile),
-                            "--zen-profile",
-                            format_path(self.config.zen_profile),
-                            "--export-file",
-                            str(export_file),
-                        ],
+                        lambda: migrate_favicons(
+                            arc_profile=self.config.arc_profile,
+                            zen_profile=self.config.zen_profile,
+                            export_file=export_file,
+                        ),
                     )
                 )
 
@@ -278,14 +281,10 @@ class MigrationWorker(QThread):
                 steps.append(
                     (
                         "Sync pinned-folder open/closed state",
-                        [
-                            python,
-                            str(REPO_ROOT / "sync_arc_folder_states.py"),
-                            "--arc-profile",
-                            format_path(self.config.arc_profile),
-                            "--zen-profile",
-                            format_path(self.config.zen_profile),
-                        ],
+                        lambda: sync_folder_states(
+                            arc_profile=self.config.arc_profile,
+                            zen_profile=self.config.zen_profile,
+                        ),
                     )
                 )
 
@@ -293,14 +292,10 @@ class MigrationWorker(QThread):
                 steps.append(
                     (
                         "Sync workspace icons",
-                        [
-                            python,
-                            str(REPO_ROOT / "sync_arc_workspace_icons.py"),
-                            "--arc-profile",
-                            format_path(self.config.arc_profile),
-                            "--zen-profile",
-                            format_path(self.config.zen_profile),
-                        ],
+                        lambda: sync_workspace_icons(
+                            arc_profile=self.config.arc_profile,
+                            zen_profile=self.config.zen_profile,
+                        ),
                     )
                 )
 
@@ -308,37 +303,45 @@ class MigrationWorker(QThread):
                 steps.append(
                     (
                         "Sync workspace themes",
-                        [
-                            python,
-                            str(REPO_ROOT / "sync_arc_workspace_themes.py"),
-                            "--arc-profile",
-                            format_path(self.config.arc_profile),
-                            "--zen-profile",
-                            format_path(self.config.zen_profile),
-                        ],
+                        lambda: sync_workspace_themes(
+                            arc_profile=self.config.arc_profile,
+                            zen_profile=self.config.zen_profile,
+                        ),
                     )
                 )
 
-            for index, (title, command) in enumerate(steps, start=1):
-                self.step.emit(index, len(steps), title)
-                self.line.emit(f"\n[{index}/{len(steps)}] {title}")
-                result = subprocess.Popen(
-                    command,
-                    cwd=REPO_ROOT,
-                    env=env,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                )
-                assert result.stdout is not None
-                for line in result.stdout:
-                    self.line.emit(clean_log_line(line.rstrip()))
-                return_code = result.wait()
-                if return_code != 0:
-                    raise RuntimeError(f"{title} failed with exit code {return_code}")
+            handler = WorkerLogHandler(self.line.emit)
+            root_logger = logging.getLogger()
+            root_logger.addHandler(handler)
+            try:
+                for index, (title, operation) in enumerate(steps, start=1):
+                    self.step.emit(index, len(steps), title)
+                    self.line.emit(f"\n[{index}/{len(steps)}] {title}")
+                    result = operation()
+                    if result is False:
+                        raise RuntimeError(f"{title} failed")
+            finally:
+                root_logger.removeHandler(handler)
 
         self.done.emit(True, "Migration finished successfully.")
+
+    def _extract_arc_data(self, export_file: Path) -> bool:
+        extractor = ArcPinnedTabExtractor(self.config.arc_profile)
+        arc_spaces = extractor.extract_pinned_tabs()
+        if not arc_spaces:
+            raise RuntimeError("No Arc tabs or folders found to migrate.")
+
+        if not extractor.export_to_json(arc_spaces, export_file):
+            raise RuntimeError("Failed to write Arc export.")
+
+        summary = extractor.get_extraction_summary(arc_spaces)
+        self.line.emit(
+            "Extracted "
+            f"{summary['total_spaces']} spaces, "
+            f"{summary['total_pinned_tabs']} tabs, "
+            f"{summary['total_folders']} folders"
+        )
+        return True
 
 
 class MainWindow(QMainWindow):

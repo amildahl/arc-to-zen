@@ -219,20 +219,10 @@ def update_file(path: Path, themes: Dict[str, Dict[str, Any]], timestamp: str) -
     return changed
 
 
-def main() -> bool:
-    parser = argparse.ArgumentParser(description="Sync Arc workspace themes into Zen workspaces.")
-    parser.add_argument(
-        "--arc-profile",
-        help="Path to the Arc profile root containing StorableSidebar.json.",
-    )
-    parser.add_argument(
-        "--zen-profile",
-        help="Path to a Zen profile directory, or a Zen root containing profiles.ini.",
-    )
-    args = parser.parse_args()
-
-    profile = resolve_zen_profile(args.zen_profile)
-    themes = arc_workspace_themes(args.arc_profile)
+def sync_workspace_themes(arc_profile: str | Path | None = None, zen_profile: str | Path | None = None) -> bool:
+    """Sync Arc workspace themes into Zen workspaces."""
+    profile = resolve_zen_profile(zen_profile)
+    themes = arc_workspace_themes(arc_profile)
     logger.info(f"Loaded {len(themes)} Arc workspace themes")
     for name, theme in themes.items():
         colors = [color["c"] for color in theme["gradientColors"]]
@@ -257,6 +247,20 @@ def main() -> bool:
 
     logger.info(f"Done. Changed {total} workspace theme fields across Zen session files.")
     return True
+
+
+def main() -> bool:
+    parser = argparse.ArgumentParser(description="Sync Arc workspace themes into Zen workspaces.")
+    parser.add_argument(
+        "--arc-profile",
+        help="Path to the Arc profile root containing StorableSidebar.json.",
+    )
+    parser.add_argument(
+        "--zen-profile",
+        help="Path to a Zen profile directory, or a Zen root containing profiles.ini.",
+    )
+    args = parser.parse_args()
+    return sync_workspace_themes(args.arc_profile, args.zen_profile)
 
 
 if __name__ == "__main__":

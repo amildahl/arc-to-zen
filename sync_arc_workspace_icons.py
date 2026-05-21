@@ -102,20 +102,10 @@ def update_file(path: Path, icons: Dict[str, str], timestamp: str) -> int:
     return changed
 
 
-def main() -> bool:
-    parser = argparse.ArgumentParser(description="Sync Arc space icons into Zen workspaces.")
-    parser.add_argument(
-        "--arc-profile",
-        help="Path to the Arc profile root containing StorableSidebar.json.",
-    )
-    parser.add_argument(
-        "--zen-profile",
-        help="Path to a Zen profile directory, or a Zen root containing profiles.ini.",
-    )
-    args = parser.parse_args()
-
-    profile = resolve_zen_profile(args.zen_profile)
-    icons = arc_workspace_icons(args.arc_profile)
+def sync_workspace_icons(arc_profile: str | Path | None = None, zen_profile: str | Path | None = None) -> bool:
+    """Sync Arc space icons into Zen workspaces."""
+    profile = resolve_zen_profile(zen_profile)
+    icons = arc_workspace_icons(arc_profile)
     logger.info(f"Loaded {len(icons)} Arc workspace icons")
     for name, icon in icons.items():
         logger.info(f"   {name}: {icon}")
@@ -133,6 +123,20 @@ def main() -> bool:
 
     logger.info(f"Done. Changed {total} workspace icon fields across Zen session files.")
     return True
+
+
+def main() -> bool:
+    parser = argparse.ArgumentParser(description="Sync Arc space icons into Zen workspaces.")
+    parser.add_argument(
+        "--arc-profile",
+        help="Path to the Arc profile root containing StorableSidebar.json.",
+    )
+    parser.add_argument(
+        "--zen-profile",
+        help="Path to a Zen profile directory, or a Zen root containing profiles.ini.",
+    )
+    args = parser.parse_args()
+    return sync_workspace_icons(args.arc_profile, args.zen_profile)
 
 
 if __name__ == "__main__":
