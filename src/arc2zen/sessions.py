@@ -69,7 +69,10 @@ def write_mozilla_lz4(filepath: Path, data: Dict[str, Any], create_backup: bool 
     import lz4.block
 
     if create_backup:
-        backup_file(filepath)
+        # Use a timestamped label, not a bare `.bak`. A `.bak` next to one of
+        # Zen's session files is one of the candidates Zen restores from at
+        # startup, which would silently undo whatever we just wrote.
+        backup_file(filepath, "write-backup", datetime.now().strftime("%Y%m%d-%H%M%S"))
 
     json_bytes = json.dumps(data, separators=(',', ':'), ensure_ascii=False).encode('utf-8')
     logger.info(f"   JSON size: {len(json_bytes):,} bytes")
@@ -397,17 +400,19 @@ def reset_session_window_state(window: Dict[str, Any]):
     window["tabs"] = []
     window["folders"] = []
     window["groups"] = []
+    window["spaces"] = []
     window["splitViews"] = []
     window["splitViewData"] = []
     window["closedGroups"] = []
     window["_closedTabs"] = []
     window["_lastClosedTabGroupCount"] = -1
     window["lastClosedTabGroupId"] = None
+    window["activeZenSpace"] = None
     window["selected"] = 1
 
 
 def reset_zen_session_state(data: Dict[str, Any], clear_window_history: bool = False):
-    """Clear Zen session tabs, folders, groups, pins, and optional closed-tab history."""
+    """Clear Zen session tabs, folders, groups, pins, workspaces, and optional closed-tab history."""
     if "windows" in data:
         for window in data.get("windows", []):
             reset_session_window_state(window)
@@ -419,6 +424,7 @@ def reset_zen_session_state(data: Dict[str, Any], clear_window_history: bool = F
     data["tabs"] = []
     data["folders"] = []
     data["groups"] = []
+    data["spaces"] = []
     data["splitViewData"] = []
 
 
@@ -462,13 +468,89 @@ def nuke_session_file(path: Path, timestamp: str, create_backups: bool = True) -
     return True
 
 
+ZEN_DB_TABLES_TO_NUKE = (
+    "zen_pins",
+    "zen_pins_changes",
+    "zen_workspaces",
+    "zen_workspaces_changes",
+    "zen_bookmarks_workspaces",
+    "zen_bookmarks_workspaces_changes",
+)
+
+
+def nuke_zen_db_tables(profile: Path) -> int:
+    """Clear Zen-specific tables (workspaces, pins, sync change-tracking) from places.sqlite.
+
+    Assumes places.sqlite was already backed up by nuke_bookmarks; this only
+    issues DELETE statements on the open db.
+    """
+    places = profile / "places.sqlite"
+    if not places.exists():
+        return 0
+
+    con = sqlite3.connect(places)
+    try:
+        existing = {row[0] for row in con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'zen_%'"
+        ).fetchall()}
+        total = 0
+        for table in ZEN_DB_TABLES_TO_NUKE:
+            if table not in existing:
+                continue
+            before = con.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+            con.execute(f"DELETE FROM {table}")
+            total += before
+            if before:
+                logger.info(f"🧨 Removed {before} rows from {table}")
+        con.commit()
+        return total
+    finally:
+        con.close()
+
+
+def assert_zen_not_running(profile: Path):
+    """Refuse to nuke if Zen holds an exclusive lock on places.sqlite."""
+    places = profile / "places.sqlite"
+    if not places.exists():
+        return
+    try:
+        con = sqlite3.connect(places, timeout=0.5)
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            con.execute("ROLLBACK")
+        finally:
+            con.close()
+    except sqlite3.OperationalError as exc:
+        raise RuntimeError(
+            f"Zen appears to be running (places.sqlite is locked: {exc}). "
+            "Fully quit Zen (Cmd+Q) and retry."
+        )
+
+
 def nuke_zen_profile(profile: Path, timestamp: str, create_backups: bool = True):
-    """Destructively clear Zen tabs, folders, pins, groups, closed tabs, and bookmarks."""
-    logger.info("🧨 Nuke mode: clearing Zen tabs, folders, pins, groups, closed tab state, and bookmarks")
-    nuke_session_file(profile / "zen-sessions.jsonlz4", timestamp, create_backups=create_backups)
-    nuke_session_file(profile / "sessionstore.jsonlz4", timestamp, create_backups=create_backups)
-    nuke_session_file(profile / "sessionstore-backups" / "recovery.jsonlz4", timestamp, create_backups=create_backups)
+    """Destructively clear Zen tabs, folders, pins, groups, closed tabs, workspaces, and bookmarks."""
+    assert_zen_not_running(profile)
+    logger.info("🧨 Nuke mode: clearing Zen tabs, folders, pins, groups, closed tab state, workspaces, and bookmarks")
+
+    primary_files = [
+        profile / "zen-sessions.jsonlz4",
+        profile / "sessionstore.jsonlz4",
+        profile / "sessionstore-backups" / "recovery.jsonlz4",
+    ]
+    # Mozilla / Zen also maintain rotated backups that get used on startup if the
+    # primary files are missing or empty. Nuke must clear these too.
+    mozilla_backups = [
+        profile / "sessionstore-backups" / "recovery.baklz4",
+        profile / "sessionstore-backups" / "previous.jsonlz4",
+    ]
+    # Old session snapshots saved across Firefox/Zen upgrades.
+    mozilla_backups.extend(sorted((profile / "sessionstore-backups").glob("upgrade.jsonlz4-*")))
+
+    for path in primary_files + mozilla_backups:
+        nuke_session_file(path, timestamp, create_backups=create_backups)
+
     nuke_bookmarks(profile, timestamp, create_backups=create_backups)
+    nuke_zen_db_tables(profile)
 
 
 def sync_sessionstore(
