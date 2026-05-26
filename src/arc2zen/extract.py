@@ -335,6 +335,14 @@ class ArcPinnedTabExtractor:
                                                 child_folder_path = current_folder_path + [folder_title] if is_pinned else current_folder_path
                                                 process_items_recursive(folder_children, child_folder_path, is_pinned)
 
+                                    elif 'splitView' in data_section:
+                                        # Arc split-view wrapper. Descend into the children so the
+                                        # real tabs inside the split are preserved as side-by-side
+                                        # pinned tabs. (Zen's split layout is not reconstructed.)
+                                        split_children = item_data.get('childrenIds', [])
+                                        if split_children:
+                                            process_items_recursive(split_children, current_folder_path, is_pinned)
+
                             # Start recursive processing with top-level display order
                             process_items_recursive(display_order, is_pinned=True)
                             process_items_recursive(unpinned_order, is_pinned=False)
@@ -503,6 +511,19 @@ class ArcPinnedTabExtractor:
 
                 # Get the children IDs for this topApps container first
                 children_ids = item_data.get('childrenIds', [])
+
+                # Essentials can be wrapped in Arc splitView items; expand those
+                # so the real tabs underneath are visible to assignment + extraction.
+                def flatten_split_children(ids):
+                    out = []
+                    for tid in ids:
+                        item = items_lookup.get(tid, {})
+                        if 'splitView' in item.get('data', {}):
+                            out.extend(flatten_split_children(item.get('childrenIds', [])))
+                        else:
+                            out.append(tid)
+                    return out
+                children_ids = flatten_split_children(children_ids)
 
                 # Find the corresponding space for this profile
                 target_space_id = profile_to_space.get(directory_basename, "orphaned")
