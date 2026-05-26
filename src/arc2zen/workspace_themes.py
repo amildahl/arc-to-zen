@@ -150,20 +150,36 @@ def zen_theme_from_arc(window_theme: Dict[str, Any]) -> Optional[Dict[str, Any]]
 
 
 def arc_workspace_themes(arc_profile: str | Path | None = None) -> Dict[str, Dict[str, Any]]:
+    """Collect {workspace_name: theme} from Arc, preferring local sidebar over
+    Firebase sync (which is often stale or incomplete)."""
     sidebar = load_arc_sidebar(arc_profile)
-    space_models = sidebar.get("firebaseSyncState", {}).get("syncData", {}).get("spaceModels", [])
     themes: Dict[str, Dict[str, Any]] = {}
 
-    for _, model in alternating_pairs(space_models):
-        value = model.get("value", {}) if isinstance(model, dict) else {}
-        name = value.get("title")
-        window_theme = value.get("customInfo", {}).get("windowTheme")
-        if not name or not isinstance(window_theme, dict):
-            continue
+    def collect_from(pairs):
+        for _, model in pairs:
+            value = model.get("value", {}) if isinstance(model, dict) else model if isinstance(model, dict) else {}
+            name = value.get("title")
+            window_theme = value.get("customInfo", {}).get("windowTheme") if isinstance(value.get("customInfo"), dict) else None
+            if not name or not isinstance(window_theme, dict):
+                continue
+            theme = zen_theme_from_arc(window_theme)
+            if theme:
+                themes[name] = theme
 
-        theme = zen_theme_from_arc(window_theme)
-        if theme:
-            themes[name] = theme
+    # Firebase first (lower priority — gets overwritten by local below)
+    collect_from(alternating_pairs(sidebar.get("firebaseSyncState", {}).get("syncData", {}).get("spaceModels", [])))
+
+    # Local sidebar entries are stored as [id, value, id, value, ...] but without
+    # the {"value": ...} wrapper, so we adapt them to look like firebase models.
+    for container in sidebar.get("sidebar", {}).get("containers", []):
+        if not isinstance(container, dict):
+            continue
+        spaces = container.get("spaces", [])
+        wrapped = []
+        for j in range(0, len(spaces) - 1, 2):
+            if isinstance(spaces[j], str) and isinstance(spaces[j + 1], dict):
+                wrapped.extend([spaces[j], {"value": spaces[j + 1]}])
+        collect_from(alternating_pairs(wrapped))
 
     return themes
 

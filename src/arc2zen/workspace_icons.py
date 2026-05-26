@@ -41,20 +41,35 @@ def zen_icon_from_arc_icon_type(icon_type: Optional[Dict[str, Any]]) -> Optional
 
 
 def arc_workspace_icons(arc_profile: str | Path | None = None) -> Dict[str, str]:
+    """Collect {workspace_name: icon} from Arc, preferring local sidebar over
+    Firebase sync (which is often stale or incomplete)."""
     sidebar = load_arc_sidebar(arc_profile)
+    icons: Dict[str, str] = {}
+
+    # Firebase first (lower priority — gets overwritten by local below)
     space_models = sidebar.get("firebaseSyncState", {}).get("syncData", {}).get("spaceModels", [])
-    icons = {}
-
     for i in range(0, len(space_models) - 1, 2):
-        space_id = space_models[i]
-        if not isinstance(space_id, str):
+        if not isinstance(space_models[i], str):
             continue
-
-        value = space_models[i + 1].get("value", {})
+        value = space_models[i + 1].get("value", {}) if isinstance(space_models[i + 1], dict) else {}
         name = value.get("title")
         icon = zen_icon_from_arc_icon_type(value.get("customInfo", {}).get("iconType"))
         if name and icon:
             icons[name] = icon
+
+    # Local sidebar (higher priority — what Arc actually displays)
+    for container in sidebar.get("sidebar", {}).get("containers", []):
+        if not isinstance(container, dict):
+            continue
+        spaces = container.get("spaces", [])
+        for j in range(0, len(spaces) - 1, 2):
+            if not (isinstance(spaces[j], str) and isinstance(spaces[j + 1], dict)):
+                continue
+            value = spaces[j + 1]
+            name = value.get("title")
+            icon = zen_icon_from_arc_icon_type(value.get("customInfo", {}).get("iconType"))
+            if name and icon:
+                icons[name] = icon
 
     return icons
 

@@ -91,62 +91,86 @@ class ArcPinnedTabExtractor:
         """Parse the local sidebar data structure (much simpler approach)."""
         arc_spaces = []
 
-        # Get space information from sync data
-        space_models = data.get('firebaseSyncState', {}).get('syncData', {}).get('spaceModels', [])
-        spaces_info = {}
+        def extract_space_meta(space_data: Dict) -> Dict:
+            """Pull name/icon/profile/color out of a space's value dict.
+            Any field may be None if the source dict doesn't carry it."""
+            name = space_data.get('title') or None
 
-        # Build space lookup with icons
+            custom_info = space_data.get('customInfo') or {}
+            icon_type = custom_info.get('iconType') or {}
+            icon = icon_type.get('emoji_v2')
+
+            profile = None
+            profile_data = space_data.get('profile') or {}
+            custom = profile_data.get('custom') or {}
+            if '_0' in custom:
+                profile = (custom['_0'] or {}).get('directoryBasename')
+            if profile is None and name == "Personal":
+                profile = "Default"
+
+            color = None
+            window_theme = custom_info.get('windowTheme') or {}
+            primary_palette = window_theme.get('primaryColorPalette') or {}
+            mid_tone = primary_palette.get('midTone') or {}
+            if all(k in mid_tone for k in ('red', 'green', 'blue')):
+                r = max(0, min(1, mid_tone['red']))
+                g = max(0, min(1, mid_tone['green']))
+                b = max(0, min(1, mid_tone['blue']))
+                color = {'r': r, 'g': g, 'b': b}
+
+            return {'name': name, 'icon': icon, 'profile': profile, 'color': color}
+
+        def merge_meta(into: Dict, src: Dict, space_id: str, source_label: str):
+            """Fill blank fields in `into` from `src`, logging when icon/color arrives."""
+            for key in ('name', 'icon', 'profile', 'color'):
+                if not into.get(key) and src.get(key):
+                    into[key] = src[key]
+                    if key == 'icon':
+                        logger.info(f"  🎨 Found icon for {into.get('name') or space_id} ({source_label}): {src[key]}")
+                    elif key == 'color':
+                        c = src[key]
+                        logger.info(f"  🎨 Found color for {into.get('name') or space_id} ({source_label}): RGB({c['r']:.3f}, {c['g']:.3f}, {c['b']:.3f})")
+
+        # Primary source: local sidebar (what Arc actually displays).
+        spaces_info: Dict[str, Dict] = {}
+
+        for container in data.get('sidebar', {}).get('containers', []):
+            if not isinstance(container, dict):
+                continue
+            local_spaces = container.get('spaces', [])
+            j = 0
+            while j < len(local_spaces):
+                if isinstance(local_spaces[j], str) and j + 1 < len(local_spaces) and isinstance(local_spaces[j + 1], dict):
+                    space_id = local_spaces[j]
+                    if space_id not in spaces_info:
+                        spaces_info[space_id] = {'name': None, 'icon': None, 'profile': None, 'color': None}
+                    merge_meta(spaces_info[space_id], extract_space_meta(local_spaces[j + 1]), space_id, 'local')
+                    j += 2
+                else:
+                    j += 1
+
+        # Fallback source: Firebase sync data. Adds spaces that only exist
+        # remotely, and fills individual blank fields on local entries.
+        space_models = data.get('firebaseSyncState', {}).get('syncData', {}).get('spaceModels', [])
         i = 0
         while i < len(space_models):
             if isinstance(space_models[i], str) and i + 1 < len(space_models):
                 space_id = space_models[i]
-                space_data = space_models[i + 1].get('value', {})
-                space_name = space_data.get('title', f'Space {space_id}')
-
-                # Extract icon from customInfo if available
-                icon = None
-                custom_info = space_data.get('customInfo', {})
-                icon_type = custom_info.get('iconType', {})
-                if 'emoji_v2' in icon_type:
-                    icon = icon_type['emoji_v2']
-                    logger.info(f"  🎨 Found icon for {space_name}: {icon}")
-
-                # Extract profile information for Essential tabs mapping
-                profile = None
-                profile_data = space_data.get('profile', {})
-                if 'custom' in profile_data and '_0' in profile_data['custom']:
-                    custom_data = profile_data['custom']['_0']
-                    profile = custom_data.get('directoryBasename')
-
-                # If no profile is set (Personal space), map to "Default" profile
-                if profile is None and space_name == "Personal":
-                    profile = "Default"
-
-                # Extract color from windowTheme if available
-                color = None
-                window_theme = custom_info.get('windowTheme', {})
-                if window_theme:
-                    primary_palette = window_theme.get('primaryColorPalette', {})
-                    if primary_palette:
-                        # Use midTone as the main color representation
-                        mid_tone = primary_palette.get('midTone', {})
-                        if mid_tone and 'red' in mid_tone and 'green' in mid_tone and 'blue' in mid_tone:
-                            # Extract RGB values (Arc uses extended sRGB with values that can be negative)
-                            r = max(0, min(1, mid_tone['red']))  # Clamp to 0-1 range
-                            g = max(0, min(1, mid_tone['green']))
-                            b = max(0, min(1, mid_tone['blue']))
-                            color = {'r': r, 'g': g, 'b': b}
-                            logger.info(f"  🎨 Found color for {space_name}: RGB({r:.3f}, {g:.3f}, {b:.3f})")
-
-                spaces_info[space_id] = {
-                    'name': space_name,
-                    'icon': icon,
-                    'profile': profile,
-                    'color': color
-                }
+                space_value = space_models[i + 1].get('value', {}) if isinstance(space_models[i + 1], dict) else {}
+                fb_meta = extract_space_meta(space_value)
+                if space_id not in spaces_info:
+                    spaces_info[space_id] = {'name': None, 'icon': None, 'profile': None, 'color': None}
+                    if fb_meta.get('name'):
+                        logger.info(f"  ☁️  Space {fb_meta['name']} found only in Firebase sync (not in local sidebar)")
+                merge_meta(spaces_info[space_id], fb_meta, space_id, 'firebase')
                 i += 2
             else:
                 i += 1
+
+        # Final fallback: synthesize a placeholder name for anything still nameless.
+        for space_id, meta in spaces_info.items():
+            if not meta.get('name'):
+                meta['name'] = f'Space {space_id}'
 
         # Get all items from local sidebar
         containers = data.get('sidebar', {}).get('containers', [])
@@ -322,10 +346,9 @@ class ArcPinnedTabExtractor:
                             pinned_tabs.sort(key=lambda tab: tab.index)
                             folders.sort(key=lambda folder: folder.index)
 
-                        if pinned_tabs or folders:
-                            logger.info(f"  ✅ {space_name}: {len(pinned_tabs)} pinned tabs, {len(folders)} folders")
-                            space_color = space_info.get('color')
-                            arc_spaces.append(ArcSpace(space_id, space_name, pinned_tabs, folders, space_icon, space_color))
+                        logger.info(f"  ✅ {space_name}: {len(pinned_tabs)} pinned tabs, {len(folders)} folders")
+                        space_color = space_info.get('color')
+                        arc_spaces.append(ArcSpace(space_id, space_name, pinned_tabs, folders, space_icon, space_color))
             else:
                 # Fallback to original method if sidebar spaces not found
                 for space_id, space_info in spaces_info.items():
@@ -334,13 +357,12 @@ class ArcPinnedTabExtractor:
                     pinned_tabs = pinned_tabs_by_space[space_id]
                     folders = folders_by_space[space_id]
 
-                    if pinned_tabs:
-                        # Sort pinned tabs and folders by their original index to preserve order
-                        pinned_tabs.sort(key=lambda tab: tab.index)
-                        folders.sort(key=lambda folder: folder.index)
-                        logger.info(f"  ✅ {space_name}: {len(pinned_tabs)} pinned tabs, {len(folders)} folders")
-                        space_color = space_info.get('color')
-                        arc_spaces.append(ArcSpace(space_id, space_name, pinned_tabs, folders, space_icon, space_color))
+                    # Sort pinned tabs and folders by their original index to preserve order
+                    pinned_tabs.sort(key=lambda tab: tab.index)
+                    folders.sort(key=lambda folder: folder.index)
+                    logger.info(f"  ✅ {space_name}: {len(pinned_tabs)} pinned tabs, {len(folders)} folders")
+                    space_color = space_info.get('color')
+                    arc_spaces.append(ArcSpace(space_id, space_name, pinned_tabs, folders, space_icon, space_color))
 
         # Extract Essential tabs and distribute them to their appropriate workspaces
         essential_tabs_by_space = self._extract_essential_tabs_distributed(data, spaces_info)
